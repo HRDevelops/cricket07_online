@@ -237,11 +237,6 @@ let netKeyPressed = 0;   // keys pressed since the last poll, so a tap shorter t
 function hookInput(M, net) {
   const canvas = $('canvas');
   if (net) {
-    // In multiplayer mode, NEVER call _input_key_hid so Cricket 07 never detects a PC keyboard (P1)
-    if (M) {
-      M._input_key_hid = () => {};
-      M.input_key_hid = () => {};
-    }
     const key = (down) => (e) => {
       const bit = NET_KEYS[e.code];
       if (bit === undefined) return;
@@ -259,7 +254,7 @@ function hookInput(M, net) {
     const u = HID[e.code];
     if (u === undefined || e.repeat) return;
     if (!(e.metaKey && !down)) e.preventDefault();
-    if (M._input_key_hid) M._input_key_hid(u, down ? 1 : 0);
+    M._input_key_hid(u, down ? 1 : 0);
   };
   window.addEventListener('keydown', key(true));
   window.addEventListener('keyup', key(false));
@@ -270,14 +265,10 @@ function hookInput(M, net) {
       const p = canvas.requestPointerLock?.();
       if (p && p.catch) p.catch(() => {});
     }
-    if (M._input_mouse_button) M._input_mouse_button([0, 2, 1][e.button] ?? 0, 1);
+    M._input_mouse_button([0, 2, 1][e.button] ?? 0, 1);
   });
-  window.addEventListener('mouseup', (e) => {
-    if (M._input_mouse_button) M._input_mouse_button([0, 2, 1][e.button] ?? 0, 0);
-  });
-  canvas.addEventListener('mousemove', (e) => {
-    if (M._input_mouse_move) M._input_mouse_move(e.movementX, e.movementY);
-  });
+  window.addEventListener('mouseup', (e) => M._input_mouse_button([0, 2, 1][e.button] ?? 0, 0));
+  canvas.addEventListener('mousemove', (e) => M._input_mouse_move(e.movementX, e.movementY));
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
@@ -447,13 +438,15 @@ async function run(session) {
   if (params.has('fps')) envObj.RC_LOG_FPS = '1';
   if (session) {
     if (session.slot === undefined) session.slot = session.you;
-    envObj.RC_NETPLAY = '1';
-    envObj.RC_DETERMINISTIC = '1';
-    envObj.RC_PADS = '2';
-    envObj.RC_NP_PLAYERS = '2';
-    envObj.RC_NP_SLOT = String(session.slot ?? session.you ?? 0);
-    envObj.RC_NP_DELAY = String(session.delay || 3);
-    envObj.RC_USERDATA = '/opfs/' + netSaves(session);
+    Object.assign(envObj, RcNetplay.gameEnv(session), {
+      RC_NETPLAY: '1',
+      RC_DETERMINISTIC: '1',
+      RC_PADS: '2',
+      RC_NP_PLAYERS: '2',
+      RC_NP_SLOT: String(session.slot),
+      RC_NP_DELAY: String(session.delay || 3),
+      RC_USERDATA: '/opfs/' + netSaves(session),
+    });
     console.log('[netplay] Booting engine with session ENV:', envObj);
   } else {
     envObj.RC_PADS = params.get('pads') || '1';
@@ -487,17 +480,24 @@ async function run(session) {
     preRun: [(m) => {
       m = m || {};
       m.ENV = m.ENV || {};
+      if (params.has('mute')) m.ENV.RC_NO_AUDIO = '1';
+      if (params.get('exe')) m.ENV.RC_EXE = params.get('exe');
+      if (params.has('log')) m.ENV.RC_LOG = '1';
+      if (params.has('pads')) m.ENV.RC_PADS = params.get('pads');
+      if (params.has('queue')) m.ENV.RC_QUEUE = params.get('queue');
       if (session) {
-        m.ENV.RC_NETPLAY = '1';
-        m.ENV.RC_DETERMINISTIC = '1';
-        m.ENV.RC_PADS = '2';
-        m.ENV.RC_NP_PLAYERS = '2';
-        m.ENV.RC_NP_SLOT = String(session.slot ?? session.you ?? 0);
-        m.ENV.RC_NP_DELAY = String(session.delay || 3);
-        m.ENV.RC_USERDATA = '/opfs/' + netSaves(session);
-      } else {
-        if (params.has('pads')) m.ENV.RC_PADS = params.get('pads');
+        Object.assign(m.ENV, RcNetplay.gameEnv(session), {
+          RC_NETPLAY: '1',
+          RC_DETERMINISTIC: '1',
+          RC_PADS: '2',
+          RC_NP_PLAYERS: '2',
+          RC_NP_SLOT: String(session.slot),
+          RC_NP_DELAY: String(session.delay || 3),
+          RC_USERDATA: '/opfs/' + netSaves(session),
+        });
       }
+      m.ENV.RC_LOG_FPS = params.has('fps') ? '1' : '';
+      if (!params.has('fps')) delete m.ENV.RC_LOG_FPS;
       Object.assign(m.ENV, envObj);
       m.onExit = function(status) {
         console.log('Game exited with status:', status);
