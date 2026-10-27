@@ -22,6 +22,31 @@ const MARKER = '.installed.json';   // { version } once every file is copied
 let NETPLAY_BASE = new URL(params.get('netplay') || './', location.href).href.replace(/\/?$/, '/');
 const status = (t) => { $('status').textContent = t; };
 // the launcher's screens (index.html): loading, home, online, lobby
+function show(el) {
+  if (typeof el === 'string') {
+    const viewEl = document.getElementById('view-' + el);
+    if (viewEl) {
+      for (const v of document.querySelectorAll('#panel .view')) {
+        v.classList.toggle('hidden', v !== viewEl);
+      }
+      return;
+    }
+    el = document.getElementById(el) || document.querySelector(el);
+  }
+  if (el) {
+    el.hidden = false;
+    if (el.style && el.style.display === 'none') el.style.display = '';
+    el.classList.remove('hidden');
+  }
+}
+
+function hide(el) {
+  if (typeof el === 'string') el = document.getElementById(el) || document.querySelector(el);
+  if (el) {
+    el.hidden = true;
+    el.classList.add('hidden');
+  }
+}
 const fail = (e) => {
   console.error('Loader error:', e);
   if (window.rcGameRunning) {
