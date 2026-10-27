@@ -179,24 +179,50 @@
       }
       else if (m.t === 'error') opts.onError?.(m.msg);
       else if (m.t === 'sig' && webrtc) onSignal(m.from, m.data).catch((e) => console.warn('webrtc:', e));
-      else if (m.t === 'left') { if (game) game._netplay_player_left(m.slot); opts.onLeft?.(m.slot); }
+      else if (m.t === 'left') {
+        const fnLeft = game?._netplay_player_left || game?.netplay_player_left || game?.wasmExports?.netplay_player_left;
+        if (fnLeft) fnLeft(m.slot);
+        opts.onLeft?.(m.slot);
+      }
       else onMessage(m, null);
     }
 
     function deliver(M, m) {
-      for (const [s, f, b, lx, ly, rx, ry, dt] of m.d || []) M._netplay_remote_input(s, f, b, lx, ly, rx, ry, dt >>> 0);
-      for (const [s, f, lo, hi] of m.h || []) M._netplay_remote_hash(s, f, lo, hi);
+      const fnRemoteInput = M._netplay_remote_input || M.netplay_remote_input || M.wasmExports?.netplay_remote_input || M.asm?._netplay_remote_input;
+      const fnRemoteHash = M._netplay_remote_hash || M.netplay_remote_hash || M.wasmExports?.netplay_remote_hash || M.asm?._netplay_remote_hash;
+      const fnGamepad = M._input_gamepad || M.input_gamepad;
+
+      for (const [s, f, b, lx, ly, rx, ry, dt] of m.d || []) {
+        if (fnRemoteInput) {
+          try { fnRemoteInput(s, f, b, lx, ly, rx, ry, dt >>> 0); } catch (e) { console.warn('[netplay] remote_input error:', e); }
+        }
+        if (fnGamepad && s !== me) {
+          try { fnGamepad(s, 1, b, lx, ly, rx, ry); } catch (_) {}
+        }
+      }
+      for (const [s, f, lo, hi] of m.h || []) {
+        if (fnRemoteHash) {
+          try { fnRemoteHash(s, f, lo, hi); } catch (_) {}
+        }
+      }
     }
 
     // Drains the game's outbox to the room and every open direct channel.
     function pump() {
       if (!game) return;
+      const fnPop = game._netplay_pop || game.netplay_pop || game.wasmExports?.netplay_pop;
+      const fnMsg = game._netplay_msg || game.netplay_msg || game.wasmExports?.netplay_msg;
+      if (!fnPop || !fnMsg) return;
       const d = [], h = [];
-      while (game._netplay_pop()) {
-        const v = [];
-        for (let i = 0; i < 10; i++) v.push(game._netplay_msg(i));
-        if (v[0] === 1) d.push([...v.slice(1, 8), v[8] >>> 0]);   // input: slot, frame, buttons, axes, frame time (us)
-        else if (v[0] === 2) h.push([v[1], v[2], v[8] >>> 0, v[9] >>> 0]);   // hash: slot, frame, lo, hi
+      try {
+        while (fnPop()) {
+          const v = [];
+          for (let i = 0; i < 10; i++) v.push(fnMsg(i));
+          if (v[0] === 1) d.push([...v.slice(1, 8), v[8] >>> 0]);   // input: slot, frame, buttons, axes, frame time (us)
+          else if (v[0] === 2) h.push([v[1], v[2], v[8] >>> 0, v[9] >>> 0]);   // hash: slot, frame, lo, hi
+        }
+      } catch (err) {
+        console.warn('[netplay] pump drain error:', err);
       }
       if (!d.length && !h.length) return;
       const text = JSON.stringify({ t: 'in', d, h });
@@ -219,6 +245,7 @@
       attach(M, pollMs = 8) {
         game = M;
         M.rcNetplayPump = pump;
+        if (typeof globalThis !== 'undefined' && globalThis.Module) globalThis.Module.rcNetplayPump = pump;
         for (const m of early.splice(0)) deliver(M, m);
         timer = setInterval(pump, pollMs);
       },

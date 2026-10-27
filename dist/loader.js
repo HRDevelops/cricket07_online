@@ -319,7 +319,8 @@ function pollLocalPad(M) {
   const key = `${b}:${ax.join(',')}`;
   if (key === netLast) return;
   netLast = key;
-  M._input_gamepad(0, 1, b, ax[0], ax[1], ax[2], ax[3]);
+  const fnGamepad = M._input_gamepad || M.input_gamepad;
+  if (fnGamepad) fnGamepad(0, 1, b, ax[0], ax[1], ax[2], ax[3]);
 }
 
 function pollGamepads(M) {
@@ -430,8 +431,21 @@ async function run(session) {
     }
   });
 
+  const envObj = {};
+  if (params.has('mute')) envObj.RC_NO_AUDIO = '1';
+  envObj.RC_EXE = params.get('exe') || 'Cricket07.cracked.exe';
+  if (params.has('log')) envObj.RC_LOG = '1';
+  envObj.RC_PADS = params.get('pads') || (session ? String(session.players) : '1');
+  if (params.has('queue')) envObj.RC_QUEUE = params.get('queue');
+  if (session) {
+    Object.assign(envObj, RcNetplay.gameEnv(session), { RC_USERDATA: '/opfs/' + netSaves(session) });
+    console.log('[netplay] Booting engine with session ENV:', envObj);
+  }
+  if (params.has('fps')) envObj.RC_LOG_FPS = '1';
+
   const M = await factory({
     arguments: ['/opfs/' + OPFS_DIR],
+    ENV: envObj,
     onExit: function(status) {
       console.log('Game exited with status:', status);
       triggerCleanExit('Emscripten onExit', status);
@@ -455,18 +469,11 @@ async function run(session) {
       }
     },
     preRun: [(m) => {
+      m.ENV = Object.assign(m.ENV || {}, envObj);
       m.onExit = function(status) {
         console.log('Game exited with status:', status);
         triggerCleanExit('Emscripten m.onExit', status);
       };
-      if (params.has('mute')) m.ENV.RC_NO_AUDIO = '1';
-      m.ENV.RC_EXE = params.get('exe') || 'Cricket07.cracked.exe';
-      if (params.has('log')) m.ENV.RC_LOG = '1';
-      if (params.has('pads')) m.ENV.RC_PADS = params.get('pads');
-      if (params.has('queue')) m.ENV.RC_QUEUE = params.get('queue');
-      if (session) Object.assign(m.ENV, RcNetplay.gameEnv(session), { RC_USERDATA: '/opfs/' + netSaves(session) });
-      m.ENV.RC_LOG_FPS = params.has('fps') ? '1' : '';
-      if (!params.has('fps')) delete m.ENV.RC_LOG_FPS;
     }],
   });
 
@@ -503,6 +510,18 @@ async function run(session) {
   M._netplay_pop = resolveExport(M, ['_netplay_pop', 'netplay_pop']) || M._netplay_pop;
   M._netplay_msg = resolveExport(M, ['_netplay_msg', 'netplay_msg']) || M._netplay_msg;
   M._netplay_player_left = resolveExport(M, ['_netplay_player_left', 'netplay_player_left']) || M._netplay_player_left;
+  M._netplay_remote_input = resolveExport(M, ['_netplay_remote_input', 'netplay_remote_input']) || M._netplay_remote_input;
+  M._netplay_remote_hash = resolveExport(M, ['_netplay_remote_hash', 'netplay_remote_hash']) || M._netplay_remote_hash;
+
+  // Unprefixed aliases
+  M.netplay_status = M._netplay_status;
+  M.netplay_pop = M._netplay_pop;
+  M.netplay_msg = M._netplay_msg;
+  M.netplay_player_left = M._netplay_player_left;
+  M.netplay_remote_input = M._netplay_remote_input;
+  M.netplay_remote_hash = M._netplay_remote_hash;
+  M.input_gamepad = M._input_gamepad;
+  M.input_key_hid = M._input_key_hid;
 
   const canvas = $('canvas');
   if (typeof M._rc_gpu_init === 'function') {
@@ -520,7 +539,12 @@ async function run(session) {
   }
 
   hookInput(M, !!session);
-  if (session) { session.client.attach(M); showNetStatus(M, session); }
+  if (session) {
+    window.Module = M;
+    globalThis.Module = M;
+    session.client.attach(M);
+    showNetStatus(M, session);
+  }
   startAudio(M).catch((e) => console.warn('audio unavailable:', e));
   const poll = session ? pollLocalPad : pollGamepads;
 
