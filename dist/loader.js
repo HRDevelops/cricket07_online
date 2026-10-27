@@ -19,7 +19,41 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const OPFS_DIR = 'rcgame';
 const MARKER = '.installed.json';   // { version } once every file is copied
-let NETPLAY_BASE = new URL(params.get('netplay') || './', location.href).href.replace(/\/?$/, '/');
+function getNetplayServerUrl(promptIfMissing = false) {
+  let url = params.get('netplay')?.trim() || $('np-server')?.value?.trim() || '';
+  if (!url) {
+    try { url = localStorage.getItem('rc-netplay')?.trim() || ''; } catch {}
+  }
+  const isGitHubPages = location.hostname.endsWith('github.io');
+  if (!url && isGitHubPages) {
+    if (promptIfMissing) {
+      const entered = window.prompt(
+        'Multiplayer Relay Server Required:\n\n' +
+        'GitHub Pages is a static host and cannot issue netplay tickets or relay inputs.\n\n' +
+        'Please enter your Cloudflare Worker URL or local relay server URL\n' +
+        '(e.g. https://cricket07-server.<subdomain>.workers.dev or http://localhost:8080):',
+        'http://localhost:8080'
+      );
+      if (entered && entered.trim()) {
+        url = entered.trim();
+        try { localStorage.setItem('rc-netplay', url); } catch {}
+        if ($('np-server')) $('np-server').value = url;
+      }
+    }
+    if (!url) {
+      const details = $('np-server-details');
+      if (details) details.open = true;
+    }
+  }
+  if (!url) {
+    url = new URL('./', location.href).href;
+  }
+  if (!/^https?:\/\//i.test(url) && !/^wss?:\/\//i.test(url)) {
+    url = (location.protocol === 'https:' ? 'https://' : 'http://') + url;
+  }
+  return url.replace(/\/?$/, '/');
+}
+let NETPLAY_BASE = getNetplayServerUrl(false);
 const status = (t) => { $('status').textContent = t; };
 // the launcher's screens (index.html): loading, home, online, lobby
 function show(el) {
@@ -379,17 +413,52 @@ async function run(session) {
   await new Promise((ok, fail) => { script.onload = ok; script.onerror = fail; document.head.appendChild(script); });
   const factory = window.createRecomp || window.createC07 || globalThis.createRecomp || globalThis.createC07;
   if (!factory) throw new Error('WebAssembly initialization factory (createRecomp / createC07) not found.');
+  let exitTriggered = false;
+  const triggerCleanExit = (reason, code) => {
+    if (exitTriggered) return;
+    exitTriggered = true;
+    console.log(`[Game Exit] ${reason}${code !== undefined ? ' (' + code + ')' : ''}. Returning cleanly to menu...`);
+    window.rcGameRunning = false;
+    setTimeout(() => {
+      window.location.reload();
+    }, 500);
+  };
+
+  window.addEventListener('error', (e) => {
+    if (e?.error?.name === 'ExitStatus' || (e?.message && e.message.includes('ExitStatus'))) {
+      triggerCleanExit('Emscripten ExitStatus exception', e.error?.status);
+    }
+  });
+
   const M = await factory({
     arguments: ['/opfs/' + OPFS_DIR],
+    onExit: function(status) {
+      console.log('Game exited with status:', status);
+      triggerCleanExit('Emscripten onExit', status);
+    },
     print: (t) => {
       console.log(t);
-      if (typeof t === 'string' && (t.includes('starting game') || t.includes('Direct3D') || t.includes('CreateDevice'))) {
-        window.rcGameRunning = true;
-        $('panel')?.classList.add('hidden');
+      if (typeof t === 'string') {
+        if (t.includes('starting game') || t.includes('Direct3D') || t.includes('CreateDevice')) {
+          window.rcGameRunning = true;
+          $('panel')?.classList.add('hidden');
+        }
+        if (t.includes('ExitProcess') || t.includes('exit(0)') || t.includes('exit process')) {
+          triggerCleanExit('kernel32 ExitProcess detected');
+        }
       }
     },
-    printErr: (t) => console.log(t),
+    printErr: (t) => {
+      console.log(t);
+      if (typeof t === 'string' && (t.includes('ExitProcess') || t.includes('exit(0)') || t.includes('ExitStatus'))) {
+        triggerCleanExit('kernel32 ExitProcess detected in stderr');
+      }
+    },
     preRun: [(m) => {
+      m.onExit = function(status) {
+        console.log('Game exited with status:', status);
+        triggerCleanExit('Emscripten m.onExit', status);
+      };
       if (params.has('mute')) m.ENV.RC_NO_AUDIO = '1';
       m.ENV.RC_EXE = params.get('exe') || 'Cricket07.cracked.exe';
       if (params.has('log')) m.ENV.RC_LOG = '1';
@@ -592,7 +661,12 @@ function setupOnline() {
     $('np-name').value = localStorage.getItem('rc-name') || '';
     const region = localStorage.getItem('rc-region');
     if ([...$('np-region').options].some((o) => o.value === region)) $('np-region').value = region;
-    if ($('np-server')) $('np-server').value = params.get('netplay') || localStorage.getItem('rc-netplay') || '';
+    const savedServer = params.get('netplay') || localStorage.getItem('rc-netplay') || '';
+    if ($('np-server')) $('np-server').value = savedServer;
+    if (location.hostname.endsWith('github.io') && !savedServer) {
+      const details = $('np-server-details');
+      if (details) details.open = true;
+    }
   } catch { /* storage blocked */ }
   if (params.get('join')) $('np-code').value = params.get('join').toUpperCase();
   let client = null;
@@ -603,30 +677,45 @@ function setupOnline() {
     if (client) return;
     const name = $('np-name').value.trim() || 'Player';
     const customServer = $('np-server')?.value.trim() || '';
-    const chosenServer = params.get('netplay') || customServer || './';
-    NETPLAY_BASE = new URL(chosenServer, location.href).href.replace(/\/?$/, '/');
+    const relayBase = getNetplayServerUrl(true);
+    if (location.hostname.endsWith('github.io') && (!relayBase || relayBase.includes('github.io'))) {
+      msg('Multiplayer requires a relay server (e.g. Cloudflare Worker or http://localhost:8080).');
+      const details = $('np-server-details');
+      if (details) details.open = true;
+      $('np-server')?.focus();
+      return;
+    }
+    NETPLAY_BASE = relayBase;
     try {
       localStorage.setItem('rc-name', name);
       localStorage.setItem('rc-region', $('np-region').value);
       if (customServer) localStorage.setItem('rc-netplay', customServer);
-      else localStorage.removeItem('rc-netplay');
+      else if (relayBase && !relayBase.includes('github.io')) localStorage.setItem('rc-netplay', relayBase);
     } catch { /* storage blocked */ }
     msg('Connecting…');
     let iceServers;   // from the first ticket (TURN credentials last a day)
     const roomUrl = async () => {   // a fresh ticket each time (they expire after an hour)
-      const res = await fetch(NETPLAY_BASE + '_netplay_ticket', { cache: 'no-store' });
-      if (!res.ok) throw new Error('Online play is not available on this server.');
+      const httpBase = NETPLAY_BASE.replace(/^ws:/i, 'http:').replace(/^wss:/i, 'https:');
+      const ticketUrl = `${httpBase.replace(/\/+$/, '')}/_netplay_ticket`;
+      let res;
+      try {
+        res = await fetch(ticketUrl, { cache: 'no-store' });
+      } catch (err) {
+        throw new Error(`Failed to reach relay server at ${httpBase}: ${err.message}`);
+      }
+      if (!res.ok) throw new Error(`Online play ticket error (${res.status}) on ${httpBase}. Verify relay server is active.`);
       const { ticket, iceServers: ice } = await res.json();
       iceServers ??= ice;
-      const url = new URL(`netplay/${code}?ticket=${encodeURIComponent(ticket)}`, NETPLAY_BASE);
+      const wsBase = NETPLAY_BASE.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+      const url = new URL(`netplay/${code}?ticket=${encodeURIComponent(ticket)}`, wsBase);
       if (create) { url.searchParams.set('create', '1'); url.searchParams.set('region', $('np-region').value); create = false; }
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      url.protocol = url.protocol === 'https:' ? 'wss:' : (url.protocol === 'http:' ? 'ws:' : url.protocol);
       return url.href;
     };
     let url;
     try { url = await roomUrl(); } catch (e) { msg(e.message); return; }
     const invite = new URL(location.href);
-    const activeServer = params.get('netplay') || customServer;
+    const activeServer = params.get('netplay') || customServer || (localStorage.getItem('rc-netplay') || '');
     invite.search = `?join=${code}` + (activeServer ? `&netplay=${encodeURIComponent(activeServer)}` : '');
     $('np-room').textContent = code;
     $('invite').textContent = invite.href;
