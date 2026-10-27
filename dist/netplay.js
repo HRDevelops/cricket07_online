@@ -239,33 +239,21 @@
 
       const slot = m.slot !== undefined ? m.slot : (m.s !== undefined ? m.s : (m.d && m.d[0] ? m.d[0][0] : undefined));
 
-      // 1. When Player 1 receives an input packet from Player 2 (slot 1):
-      //    Inject it into the virtual Gamepad 1 slot: M._input_gamepad(1, 1, buttons, lx, ly, rx, ry)
-      if (slot === 1 && me === 0 && fnGamepad) {
+      // Inject remote keyboard HID events from the other peer
+      if (fnKeyHid && (m.hid || m.hidCode !== undefined) && slot !== me) {
+        const hidCode = m.hid ? m.hid[0] : m.hidCode;
+        const isDown = m.hid ? m.hid[1] : (m.isDown ? 1 : 0);
+        try { fnKeyHid(hidCode, isDown); } catch (_) {}
+      }
+
+      // Inject remote gamepad inputs from the other peer
+      if (slot !== undefined && slot !== me && fnGamepad && (m.buttons !== undefined || (m.d && m.d[0]))) {
         const b = m.buttons !== undefined ? m.buttons : (m.d && m.d[0] ? m.d[0][2] : 0);
         const lx = m.lx !== undefined ? m.lx : (m.d && m.d[0] ? m.d[0][3] : 0);
         const ly = m.ly !== undefined ? m.ly : (m.d && m.d[0] ? m.d[0][4] : 0);
         const rx = m.rx !== undefined ? m.rx : (m.d && m.d[0] ? m.d[0][5] : 0);
         const ry = m.ry !== undefined ? m.ry : (m.d && m.d[0] ? m.d[0][6] : 0);
-        try { fnGamepad(1, 1, b, lx, ly, rx, ry); } catch (_) {}
-      }
-
-      // 2. When Player 2 receives an input packet from Player 1 (slot 0):
-      //    Inject it into the Keyboard HID slot: M._input_key_hid(hidCode, isDown)
-      if (slot === 0 && me === 1) {
-        if (fnKeyHid && (m.hid || m.hidCode !== undefined)) {
-          const hidCode = m.hid ? m.hid[0] : m.hidCode;
-          const isDown = m.hid ? m.hid[1] : (m.isDown ? 1 : 0);
-          try { fnKeyHid(hidCode, isDown); } catch (_) {}
-        }
-        if (fnGamepad && (m.buttons !== undefined || (m.d && m.d[0]))) {
-          const b = m.buttons !== undefined ? m.buttons : (m.d && m.d[0] ? m.d[0][2] : 0);
-          const lx = m.lx !== undefined ? m.lx : (m.d && m.d[0] ? m.d[0][3] : 0);
-          const ly = m.ly !== undefined ? m.ly : (m.d && m.d[0] ? m.d[0][4] : 0);
-          const rx = m.rx !== undefined ? m.rx : (m.d && m.d[0] ? m.d[0][5] : 0);
-          const ry = m.ry !== undefined ? m.ry : (m.d && m.d[0] ? m.d[0][6] : 0);
-          try { fnGamepad(0, 1, b, lx, ly, rx, ry); } catch (_) {}
-        }
+        try { fnGamepad(slot, 1, b, lx, ly, rx, ry); } catch (_) {}
       }
 
       for (const [s, f, lo, hi] of m.h || []) {
