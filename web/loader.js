@@ -22,8 +22,17 @@ const MARKER = '.installed.json';   // { version } once every file is copied
 let NETPLAY_BASE = new URL(params.get('netplay') || './', location.href).href.replace(/\/?$/, '/');
 const status = (t) => { $('status').textContent = t; };
 // the launcher's screens (index.html): loading, home, online, lobby
-const show = (view) => { for (const v of document.querySelectorAll('#panel .view')) v.classList.toggle('hidden', v.id !== 'view-' + view); };
-const fail = (e) => { status('Error: ' + e.message); $('panel').classList.remove('hidden'); show('loading'); };
+const fail = (e) => {
+  console.error('Loader error:', e);
+  if (window.rcGameRunning) {
+    console.warn('Game engine is already executing in background; preserving canvas and hiding launcher panel.');
+    $('panel')?.classList.add('hidden');
+    return;
+  }
+  status('Error: ' + e.message);
+  $('panel').classList.remove('hidden');
+  show('loading');
+};
 const mb = (n) => (n / 1e6).toFixed(0);
 
 // ------------------------------------------------------------------ game files in OPFS
@@ -347,7 +356,13 @@ async function run(session) {
   if (!factory) throw new Error('WebAssembly initialization factory (createRecomp / createC07) not found.');
   const M = await factory({
     arguments: ['/opfs/' + OPFS_DIR],
-    print: (t) => console.log(t),
+    print: (t) => {
+      console.log(t);
+      if (typeof t === 'string' && (t.includes('starting game') || t.includes('Direct3D') || t.includes('CreateDevice'))) {
+        window.rcGameRunning = true;
+        $('panel')?.classList.add('hidden');
+      }
+    },
     printErr: (t) => console.log(t),
     preRun: [(m) => {
       if (params.has('mute')) m.ENV.RC_NO_AUDIO = '1';
@@ -361,46 +376,75 @@ async function run(session) {
     }],
   });
 
-  // Resolve GPU and runtime functions across all symbol prefix variations (_rc_*, _c07_*, asm.*)
-  const gpuInit = M._rc_gpu_init || M._c07_gpu_init || M.rc_gpu_init || M.c07_gpu_init || M.asm?._rc_gpu_init || M.asm?.rc_gpu_init || M.asm?._c07_gpu_init || M.asm?.c07_gpu_init;
-  const setCanvasSize = M._rc_set_canvas_size || M._c07_set_canvas_size || M.rc_set_canvas_size || M.c07_set_canvas_size || M.asm?._rc_set_canvas_size || M.asm?.rc_set_canvas_size || M.asm?._c07_set_canvas_size || M.asm?.c07_set_canvas_size;
-  const gpuPump = M._rc_gpu_pump || M._c07_gpu_pump || M.rc_gpu_pump || M.c07_gpu_pump || M.asm?._rc_gpu_pump || M.asm?.rc_gpu_pump || M.asm?._c07_gpu_pump || M.asm?.c07_gpu_pump;
-  const audioRing = M._rc_audio_ring || M._c07_audio_ring || M.rc_audio_ring || M.c07_audio_ring || M.asm?._rc_audio_ring || M.asm?.rc_audio_ring || M.asm?._c07_audio_ring || M.asm?.c07_audio_ring;
+  window.rcGameRunning = true;
+  $('panel')?.classList.add('hidden');
 
-  if (typeof gpuInit !== 'function') {
-    throw new Error('WebAssembly GPU initialization function (_rc_gpu_init / _c07_gpu_init) was not found on module.');
-  }
+  // Universal Symbol Resolution across M, M.wasmExports, M.asm, and M.exports
+  const resolveExport = (m, names) => {
+    for (const name of names) {
+      if (typeof m[name] === 'function') return m[name];
+      if (m.wasmExports && typeof m.wasmExports[name] === 'function') return m.wasmExports[name];
+      if (m.asm && typeof m.asm[name] === 'function') return m.asm[name];
+      if (m.exports && typeof m.exports[name] === 'function') return m.exports[name];
+    }
+    return null;
+  };
 
-  M._rc_gpu_init = gpuInit;
-  M._rc_set_canvas_size = setCanvasSize;
-  M._rc_gpu_pump = gpuPump;
-  M._rc_audio_ring = audioRing;
+  const gpuInit = resolveExport(M, ['_c07_gpu_init', 'c07_gpu_init', '_rc_gpu_init', 'rc_gpu_init']);
+  const setCanvasSize = resolveExport(M, ['_c07_set_canvas_size', 'c07_set_canvas_size', '_rc_set_canvas_size', 'rc_set_canvas_size']);
+  const gpuPump = resolveExport(M, ['_c07_gpu_pump', 'c07_gpu_pump', '_rc_gpu_pump', 'rc_gpu_pump']);
+  const audioRing = resolveExport(M, ['_c07_audio_ring', 'c07_audio_ring', '_rc_audio_ring', 'rc_audio_ring']);
+
+  if (gpuInit) M._rc_gpu_init = gpuInit;
+  if (setCanvasSize) M._rc_set_canvas_size = setCanvasSize;
+  if (gpuPump) M._rc_gpu_pump = gpuPump;
+  if (audioRing) M._rc_audio_ring = audioRing;
+
+  // Resolve input and netplay functions
+  M._input_key_hid = resolveExport(M, ['_input_key_hid', 'input_key_hid']) || M._input_key_hid;
+  M._input_mouse_button = resolveExport(M, ['_input_mouse_button', 'input_mouse_button']) || M._input_mouse_button;
+  M._input_mouse_move = resolveExport(M, ['_input_mouse_move', 'input_mouse_move']) || M._input_mouse_move;
+  M._input_gamepad = resolveExport(M, ['_input_gamepad', 'input_gamepad']) || M._input_gamepad;
+  M._netplay_status = resolveExport(M, ['_netplay_status', 'netplay_status']) || M._netplay_status;
+  M._netplay_pop = resolveExport(M, ['_netplay_pop', 'netplay_pop']) || M._netplay_pop;
+  M._netplay_msg = resolveExport(M, ['_netplay_msg', 'netplay_msg']) || M._netplay_msg;
+  M._netplay_player_left = resolveExport(M, ['_netplay_player_left', 'netplay_player_left']) || M._netplay_player_left;
 
   const canvas = $('canvas');
-  M._rc_gpu_init(canvas.width, canvas.height);
-  new ResizeObserver(() => { sizeCanvas(); M._rc_set_canvas_size(canvas.width, canvas.height); }).observe(canvas);
+  if (typeof M._rc_gpu_init === 'function') {
+    try {
+      M._rc_gpu_init(canvas.width, canvas.height);
+    } catch (err) {
+      console.warn('M._rc_gpu_init execution warning:', err);
+    }
+  } else {
+    console.warn('Wasm exports available:', Object.keys(M.wasmExports || {}), Object.keys(M.asm || {}));
+  }
+
+  if (typeof M._rc_set_canvas_size === 'function') {
+    new ResizeObserver(() => { sizeCanvas(); M._rc_set_canvas_size(canvas.width, canvas.height); }).observe(canvas);
+  }
+
   hookInput(M, !!session);
   if (session) { session.client.attach(M); showNetStatus(M, session); }
   startAudio(M).catch((e) => console.warn('audio unavailable:', e));
   const poll = session ? pollLocalPad : pollGamepads;
-  // Online, present at most 60 times a second: every Present is a lockstep frame, and the input delay and
-  // the time a frame has to simulate are counted in those (netplay.js: autoDelay), so following a 120 Hz
-  // display would halve both. Solo play follows the display. A frame is due every 1/60 s, with a little
-  // tolerance so a 60 Hz display's own jitter doesn't skip one.
+
   let due = 0;
+  const pumpFn = typeof M._rc_gpu_pump === 'function' ? M._rc_gpu_pump : () => 0;
   const frame = (t) => {
     poll(M);
     if (!session || t >= due - 4) {
-      if (M._rc_gpu_pump(1)) { due = Math.max(due + 1000 / 60, t - 4); }
-    } else M._rc_gpu_pump(0);   // mid-frame readbacks only
+      if (pumpFn(1)) { due = Math.max(due + 1000 / 60, t - 4); }
+    } else pumpFn(0);   // mid-frame readbacks only
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
   // readbacks mid-frame are answered without waiting for vsync; online, the pad is also sampled here
-  setInterval(() => { if (session) poll(M); M._rc_gpu_pump(0); }, 1);
+  setInterval(() => { if (session) poll(M); pumpFn(0); }, 1);
   // Online, a hidden tab still has to present frames (browsers pause requestAnimationFrame there), or the
   // lockstep would freeze every other player with it.
-  if (session) setInterval(() => { if (document.hidden) { poll(M); M._rc_gpu_pump(1); } }, 16);
+  if (session) setInterval(() => { if (document.hidden) { poll(M); pumpFn(1); } }, 16);
   canvas.focus();
   window.recomp = M;
 }

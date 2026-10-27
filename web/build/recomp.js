@@ -6,10 +6,19 @@ var createC07=(()=>{var _scriptName=globalThis.document?.currentScript?.src;retu
   const wrappedCreateRecomp = async function(moduleArg = {}) {
     const M = await origCreateC07(moduleArg);
     if (M) {
-      M._rc_gpu_init = M._rc_gpu_init || M._c07_gpu_init || M.rc_gpu_init || M.c07_gpu_init || M.asm?._c07_gpu_init;
-      M._rc_gpu_pump = M._rc_gpu_pump || M._c07_gpu_pump || M.rc_gpu_pump || M.c07_gpu_pump || M.asm?._c07_gpu_pump;
-      M._rc_set_canvas_size = M._rc_set_canvas_size || M._c07_set_canvas_size || M.rc_set_canvas_size || M.c07_set_canvas_size || M.asm?._c07_set_canvas_size;
-      M._rc_audio_ring = M._rc_audio_ring || M._c07_audio_ring || M.rc_audio_ring || M.c07_audio_ring || M.asm?._c07_audio_ring;
+      const resolve = (names) => {
+        for (const name of names) {
+          if (typeof M[name] === 'function') return M[name];
+          if (M.wasmExports && typeof M.wasmExports[name] === 'function') return M.wasmExports[name];
+          if (M.asm && typeof M.asm[name] === 'function') return M.asm[name];
+          if (M.exports && typeof M.exports[name] === 'function') return M.exports[name];
+        }
+        return null;
+      };
+      M._rc_gpu_init = resolve(['_c07_gpu_init', 'c07_gpu_init', '_rc_gpu_init', 'rc_gpu_init']);
+      M._rc_gpu_pump = resolve(['_c07_gpu_pump', 'c07_gpu_pump', '_rc_gpu_pump', 'rc_gpu_pump']);
+      M._rc_set_canvas_size = resolve(['_c07_set_canvas_size', 'c07_set_canvas_size', '_rc_set_canvas_size', 'rc_set_canvas_size']);
+      M._rc_audio_ring = resolve(['_c07_audio_ring', 'c07_audio_ring', '_rc_audio_ring', 'rc_audio_ring']);
     }
     return M;
   };
