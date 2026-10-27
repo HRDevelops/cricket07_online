@@ -52,7 +52,18 @@
     let rtt = 0, reported = 0;   // round trip to the room (90th percentile), and the value the room last heard
     const peers = new Map();  // slot -> { pc, dc, trip, rtt }
     const p2pReported = {};
-    const send = (m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
+    const readySlots = new Set();
+    const readyListeners = new Set();
+
+    function markReady(slot) {
+      const s = (slot !== undefined && slot >= 0) ? slot : (me >= 0 ? (1 - me) : 0);
+      readySlots.add(s);
+      for (const listener of readyListeners) {
+        try { listener(s); } catch (_) {}
+      }
+    }
+
+    function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
     const ping = setInterval(() => {
       // in a game, a room connection that has gone quiet (pongs come 4 times a second) is dead even if the
       // browser hasn't noticed yet: drop it and reconnect
@@ -105,7 +116,17 @@
 
     function onMessage(m, from) {
       if (from && opts.testLoss && Math.random() < opts.testLoss) return;
-      if (m.t === 'in') { if (game) deliver(game, m); else early.push(m); }
+      if (m.type === 'ready' || m.ready) {
+        markReady(m.slot !== undefined ? m.slot : (from ? from.slot : -1));
+        return;
+      }
+      if (m.t === 'in') {
+        if (m.type === 'ready' || m.ready) {
+          markReady(m.slot !== undefined ? m.slot : (from ? from.slot : -1));
+          return;
+        }
+        if (game) deliver(game, m); else early.push(m);
+      }
       else if (m.t === 'ping' && from) from.dc.send(JSON.stringify({ t: 'pong', ts: m.ts }));
       else if (m.t === 'pong') {
         const ms = Date.now() - m.ts;
@@ -172,7 +193,14 @@
           for (const p of m.players) if (p.slot > me) peer(p.slot);
         }
         opts.onLobby?.(m);
-      } else if (m.t === 'start') { started = true; opts.onStart?.(m); }
+      } else if (m.t === 'start') {
+        started = true;
+        if (m.you !== undefined) me = m.you;
+        opts.onStart?.(m);
+      }
+      else if (m.type === 'ready' || m.ready) {
+        markReady(m.slot);
+      }
       else if (m.t === 'rejoined') {   // back in the game: resend what may have been lost
         for (const text of history) ws.send(text);
         opts.onReconnect?.('rejoined');
@@ -190,16 +218,56 @@
     function deliver(M, m) {
       const fnRemoteInput = M._netplay_remote_input || M.netplay_remote_input || M.wasmExports?.netplay_remote_input || M.asm?._netplay_remote_input;
       const fnRemoteHash = M._netplay_remote_hash || M.netplay_remote_hash || M.wasmExports?.netplay_remote_hash || M.asm?._netplay_remote_hash;
-      const fnGamepad = M._input_gamepad || M.input_gamepad;
+      const fnGamepad = M._input_gamepad || M.input_gamepad || M.wasmExports?.input_gamepad || M.asm?._input_gamepad;
+      const fnKeyHid = M._input_key_hid || M.input_key_hid || M.wasmExports?.input_key_hid || M.asm?._input_key_hid;
 
+      // Handle lockstep batch entries in m.d
       for (const [s, f, b, lx, ly, rx, ry, dt] of m.d || []) {
         if (fnRemoteInput) {
           try { fnRemoteInput(s, f, b, lx, ly, rx, ry, dt >>> 0); } catch (e) { console.warn('[netplay] remote_input error:', e); }
         }
-        if (fnGamepad && s !== me) {
-          try { fnGamepad(s, 1, b, lx, ly, rx, ry); } catch (_) {}
+        // Player 1 receives input packet from Player 2 (slot 1):
+        // Inject it into virtual Gamepad 1 slot: M._input_gamepad(1, 1, buttons, lx, ly, rx, ry)
+        if (s === 1 && me === 0 && fnGamepad) {
+          try { fnGamepad(1, 1, b, lx, ly, rx, ry); } catch (_) {}
+        }
+        // Player 2 receives input packet from Player 1 (slot 0):
+        if (s === 0 && me === 1 && fnGamepad) {
+          try { fnGamepad(0, 1, b, lx, ly, rx, ry); } catch (_) {}
         }
       }
+
+      const slot = m.slot !== undefined ? m.slot : (m.s !== undefined ? m.s : (m.d && m.d[0] ? m.d[0][0] : undefined));
+
+      // 1. When Player 1 receives an input packet from Player 2 (slot 1):
+      //    Inject it into the virtual Gamepad 1 slot: M._input_gamepad(1, 1, buttons, lx, ly, rx, ry)
+      if (slot === 1 && me === 0 && fnGamepad) {
+        const b = m.buttons !== undefined ? m.buttons : (m.d && m.d[0] ? m.d[0][2] : 0);
+        const lx = m.lx !== undefined ? m.lx : (m.d && m.d[0] ? m.d[0][3] : 0);
+        const ly = m.ly !== undefined ? m.ly : (m.d && m.d[0] ? m.d[0][4] : 0);
+        const rx = m.rx !== undefined ? m.rx : (m.d && m.d[0] ? m.d[0][5] : 0);
+        const ry = m.ry !== undefined ? m.ry : (m.d && m.d[0] ? m.d[0][6] : 0);
+        try { fnGamepad(1, 1, b, lx, ly, rx, ry); } catch (_) {}
+      }
+
+      // 2. When Player 2 receives an input packet from Player 1 (slot 0):
+      //    Inject it into the Keyboard HID slot: M._input_key_hid(hidCode, isDown)
+      if (slot === 0 && me === 1) {
+        if (fnKeyHid && (m.hid || m.hidCode !== undefined)) {
+          const hidCode = m.hid ? m.hid[0] : m.hidCode;
+          const isDown = m.hid ? m.hid[1] : (m.isDown ? 1 : 0);
+          try { fnKeyHid(hidCode, isDown); } catch (_) {}
+        }
+        if (fnGamepad && (m.buttons !== undefined || (m.d && m.d[0]))) {
+          const b = m.buttons !== undefined ? m.buttons : (m.d && m.d[0] ? m.d[0][2] : 0);
+          const lx = m.lx !== undefined ? m.lx : (m.d && m.d[0] ? m.d[0][3] : 0);
+          const ly = m.ly !== undefined ? m.ly : (m.d && m.d[0] ? m.d[0][4] : 0);
+          const rx = m.rx !== undefined ? m.rx : (m.d && m.d[0] ? m.d[0][5] : 0);
+          const ry = m.ry !== undefined ? m.ry : (m.d && m.d[0] ? m.d[0][6] : 0);
+          try { fnGamepad(0, 1, b, lx, ly, rx, ry); } catch (_) {}
+        }
+      }
+
       for (const [s, f, lo, hi] of m.h || []) {
         if (fnRemoteHash) {
           try { fnRemoteHash(s, f, lo, hi); } catch (_) {}
@@ -235,10 +303,103 @@
       for (const p of peers.values()) if (p.dc?.readyState === 'open') p.dc.send(direct);
     }
 
+    function sendReady(slot) {
+      const mySlot = slot !== undefined ? slot : me;
+      const msg = { type: 'ready', t: 'in', ready: 1, slot: mySlot };
+      send(msg);
+      for (const p of peers.values()) {
+        if (p.dc?.readyState === 'open') {
+          try { p.dc.send(JSON.stringify(msg)); } catch (_) {}
+        }
+      }
+    }
+
+    function waitForAllReady(timeoutMs = 25000) {
+      return new Promise((resolve) => {
+        const isReady = () => {
+          for (const s of readySlots) {
+            if (s !== me) return true;
+          }
+          return false;
+        };
+
+        if (isReady()) {
+          resolve(true);
+          return;
+        }
+
+        let timer = null;
+        const cb = () => {
+          if (isReady()) {
+            readyListeners.delete(cb);
+            if (timer) clearTimeout(timer);
+            resolve(true);
+          }
+        };
+        readyListeners.add(cb);
+
+        timer = setTimeout(() => {
+          readyListeners.delete(cb);
+          console.warn('[netplay] waitForAllReady timed out after ' + timeoutMs + 'ms');
+          resolve(false);
+        }, timeoutMs);
+      });
+    }
+
+    function sendInput(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
+      let pkt;
+      if (typeof arg1 === 'object' && arg1 !== null) {
+        const o = arg1;
+        const s = o.slot !== undefined ? o.slot : me;
+        const f = o.frame || 0;
+        const b = o.buttons || 0;
+        const lx = o.lx || 0, ly = o.ly || 0, rx = o.rx || 0, ry = o.ry || 0;
+        const dt = o.dt || 16667;
+        pkt = {
+          t: 'in',
+          slot: s,
+          d: [[s, f, b, lx, ly, rx, ry, dt >>> 0]],
+          buttons: b, lx, ly, rx, ry, dt
+        };
+        if (o.hidCode !== undefined || o.hid) {
+          pkt.hid = o.hid || [o.hidCode, o.isDown ? 1 : 0];
+          pkt.hidCode = pkt.hid[0];
+          pkt.isDown = pkt.hid[1];
+        }
+      } else {
+        const s = arg1 !== undefined ? arg1 : me;
+        const f = arg2 || 0;
+        const b = arg3 || 0;
+        const lx = arg4 || 0, ly = arg5 || 0, rx = arg6 || 0, ry = arg7 || 0;
+        const dt = arg8 || 16667;
+        pkt = {
+          t: 'in',
+          slot: s,
+          d: [[s, f, b, lx, ly, rx, ry, dt >>> 0]],
+          buttons: b, lx, ly, rx, ry, dt
+        };
+        if (arg9 !== undefined) {
+          pkt.hid = [arg9, arg10 ? 1 : 0];
+          pkt.hidCode = arg9;
+          pkt.isDown = arg10 ? 1 : 0;
+        }
+      }
+      const text = JSON.stringify(pkt);
+      if (ws && ws.readyState === 1) ws.send(text);
+      for (const p of peers.values()) {
+        if (p.dc?.readyState === 'open') {
+          try { p.dc.send(text); } catch (_) {}
+        }
+      }
+    }
+
     open(opts.url, false);
 
     return {
       start(delay) { send({ t: 'start', delay }); },
+      sendReady,
+      waitForAllReady,
+      sendInput,
       // Hooks a running game up to the room (after it was started with the session's settings).
       // The game thread kicks the pump as soon as it queues a message (host/netplay.c); the timer is a
       // safety net.
@@ -288,7 +449,19 @@
     };
   }
 
-  const api = { connect, gameEnv, autoDelay };
+  const api = {
+    connect,
+    gameEnv,
+    autoDelay,
+    sendInput(target, ...args) {
+      if (target && typeof target.sendInput === 'function') {
+        return target.sendInput(...args);
+      }
+      if (target && target.client && typeof target.client.sendInput === 'function') {
+        return target.client.sendInput(...args);
+      }
+    }
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.RcNetplay = api;
 })(typeof self !== 'undefined' ? self : this);

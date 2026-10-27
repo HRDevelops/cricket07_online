@@ -221,43 +221,162 @@ Object.assign(HID, {
 for (let i = 1; i <= 12; i++) HID['F' + i] = 57 + i;
 for (let i = 1; i <= 9; i++) HID['Numpad' + i] = 88 + i;
 
-// Netplay: the keyboard drives this player's pad (the game itself gets no keys or mouse, which would desync).
-// Bit 4 is LB, which the game sees as L1: its modifier for lofted shots (the in-game tutorial: "L1 + shot
-// button" to hit a six; on the keyboard that's Shift), so Shift holds it as well as Q. The game pauses only
-// on the keyboard's Esc, not the pad's Start, so Esc is bit 20: host/netplay.c applies it to the DirectInput
-// keyboard on every peer, with the pad inputs (NP_KEY_ESC). Backspace is B, back in menus.
-const NET_KEYS = {   // KeyboardEvent.code -> standard-gamepad bit (20: Esc key)
-  Enter: 0, Space: 0, KeyS: 0, Escape: 20, Backspace: 1, KeyD: 1, KeyA: 2, KeyW: 3, KeyQ: 4, KeyE: 5,
-  ShiftLeft: 4, ShiftRight: 4,
-  Digit1: 6, Digit3: 7, Tab: 8, KeyP: 9, ArrowUp: 12, ArrowDown: 13, ArrowLeft: 14, ArrowRight: 15,
-};
-let netKeyBits = 0;
-let netKeyPressed = 0;   // keys pressed since the last poll, so a tap shorter than a frame still counts
+// Netplay input handling:
+// Player 1 uses Keyboard HID and Gamepad 0.
+// Player 2 maps keyboard keys to virtual Gamepad 1 (buttons and axes) to prevent desync with P1 keyboard.
+const activeKeys = new Set();
+const P2_MAPPED_KEYS = new Set([
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'KeyS', 'Enter', 'NumpadEnter',
+  'Space', 'KeyA',
+  'KeyD', 'Backspace',
+  'KeyW',
+  'ShiftLeft', 'ShiftRight', 'KeyQ',
+  'KeyE',
+  'Digit1', 'Digit3',
+  'Tab', 'KeyP', 'Escape'
+]);
 
-function hookInput(M, net) {
-  const canvas = $('canvas');
-  if (net) {
-    const key = (down) => (e) => {
-      const bit = NET_KEYS[e.code];
-      if (bit === undefined) return;
-      e.preventDefault();
-      if (down) { netKeyBits |= 1 << bit; netKeyPressed |= 1 << bit; } else netKeyBits &= ~(1 << bit);
-      pollLocalPad(M);   // straight to the game: waiting for the next animation frame would add up to 16 ms
-    };
-    window.addEventListener('keydown', key(true));
-    window.addEventListener('keyup', key(false));
-    window.addEventListener('blur', () => { netKeyBits = 0; pollLocalPad(M); });
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    return;
+function getP2GamepadState() {
+  let buttons = 0;
+  let lx = 0, ly = 0, rx = 0, ry = 0;
+
+  // Arrow keys -> D-pad and Left Stick
+  if (activeKeys.has('ArrowUp')) {
+    buttons |= (1 << 12);
+    ly = -32767;
   }
+  if (activeKeys.has('ArrowDown')) {
+    buttons |= (1 << 13);
+    ly = 32767;
+  }
+  if (activeKeys.has('ArrowLeft')) {
+    buttons |= (1 << 14);
+    lx = -32767;
+  }
+  if (activeKeys.has('ArrowRight')) {
+    buttons |= (1 << 15);
+    lx = 32767;
+  }
+
+  // S / Enter -> Button A
+  if (activeKeys.has('KeyS') || activeKeys.has('Enter') || activeKeys.has('NumpadEnter')) {
+    buttons |= (1 << 0);
+  }
+  // Space / KeyA -> Button X
+  if (activeKeys.has('Space') || activeKeys.has('KeyA')) {
+    buttons |= (1 << 2);
+  }
+  // D / Backspace -> Button B
+  if (activeKeys.has('KeyD') || activeKeys.has('Backspace')) {
+    buttons |= (1 << 1);
+  }
+  // W -> Button Y
+  if (activeKeys.has('KeyW')) {
+    buttons |= (1 << 3);
+  }
+  // Shift / Q -> LB (L1)
+  if (activeKeys.has('ShiftLeft') || activeKeys.has('ShiftRight') || activeKeys.has('KeyQ')) {
+    buttons |= (1 << 4);
+  }
+  // E -> RB (R1)
+  if (activeKeys.has('KeyE')) {
+    buttons |= (1 << 5);
+  }
+  // Digit1 -> LT (L2)
+  if (activeKeys.has('Digit1')) {
+    buttons |= (1 << 6);
+  }
+  // Digit3 -> RT (R2)
+  if (activeKeys.has('Digit3')) {
+    buttons |= (1 << 7);
+  }
+  // Tab -> Select
+  if (activeKeys.has('Tab')) {
+    buttons |= (1 << 8);
+  }
+  // KeyP -> Start
+  if (activeKeys.has('KeyP')) {
+    buttons |= (1 << 9);
+  }
+  // Escape -> Start (bit 9) and NP_KEY_ESC (bit 20)
+  if (activeKeys.has('Escape')) {
+    buttons |= (1 << 9) | (1 << 20);
+  }
+
+  // Merge with physical gamepad if connected
+  const g = (navigator.getGamepads ? [...navigator.getGamepads()] : []).find((p) => p && p.connected);
+  if (g) {
+    const pad = readPad(g);
+    buttons |= pad.buttons;
+    if (lx === 0 && ly === 0) {
+      lx = pad.ax[0];
+      ly = pad.ax[1];
+    }
+    rx = pad.ax[2];
+    ry = pad.ax[3];
+  }
+
+  return { buttons, lx, ly, rx, ry };
+}
+
+function hookInput(M, session) {
+  const canvas = $('canvas');
+  const isP2 = session && (session.slot === 1 || session.you === 1);
+  const isP1 = session && (session.slot === 0 || session.you === 0);
+
   const key = (down) => (e) => {
+    // If the user is Player 2:
+    // DO NOT pass local keyboard events to _input_key_hid (which controls P1).
+    // Instead, translate those keyboard keys into virtual gamepad buttons and axes.
+    if (isP2) {
+      if (P2_MAPPED_KEYS.has(e.code)) e.preventDefault();
+      if (down) activeKeys.add(e.code);
+      else activeKeys.delete(e.code);
+
+      const { buttons, lx, ly, rx, ry } = getP2GamepadState();
+      const fnGamepad = M._input_gamepad || M.input_gamepad;
+      if (fnGamepad) fnGamepad(1, 1, buttons, lx, ly, rx, ry);
+
+      const sendInputFn = session?.client?.sendInput || RcNetplay?.sendInput;
+      if (sendInputFn) {
+        sendInputFn(session.client, { slot: 1, buttons, lx, ly, rx, ry, dt: 16667 });
+      }
+      return;
+    }
+
+    // Player 1 or Solo mode
     const u = HID[e.code];
-    if (u === undefined || e.repeat) return;
-    if (!(e.metaKey && !down)) e.preventDefault();
-    M._input_key_hid(u, down ? 1 : 0);
+    if (u === undefined || (e.repeat && down)) return;
+    if (!e.metaKey) e.preventDefault();
+
+    const fnKeyHid = M._input_key_hid || M.input_key_hid;
+    if (fnKeyHid) fnKeyHid(u, down ? 1 : 0);
+
+    // Bridge remote input: forward to Player 2
+    if (isP1) {
+      const sendInputFn = session?.client?.sendInput || RcNetplay?.sendInput;
+      if (sendInputFn) {
+        sendInputFn(session.client, { slot: 0, hidCode: u, isDown: down ? 1 : 0, dt: 16667 });
+      }
+    }
   };
+
   window.addEventListener('keydown', key(true));
   window.addEventListener('keyup', key(false));
+  window.addEventListener('blur', () => {
+    activeKeys.clear();
+    if (isP2) {
+      const { buttons, lx, ly, rx, ry } = getP2GamepadState();
+      const fnGamepad = M._input_gamepad || M.input_gamepad;
+      if (fnGamepad) fnGamepad(1, 1, buttons, lx, ly, rx, ry);
+      const sendInputFn = session?.client?.sendInput || RcNetplay?.sendInput;
+      if (sendInputFn) {
+        sendInputFn(session.client, { slot: 1, buttons, lx, ly, rx, ry, dt: 16667 });
+      }
+    }
+  });
+
   // The game draws its own cursor and reads relative motion. Lock the pointer when the browser allows
   // it (then the system cursor can't leave the game); without a lock, motion over the canvas still works.
   canvas.addEventListener('mousedown', (e) => {
@@ -265,10 +384,14 @@ function hookInput(M, net) {
       const p = canvas.requestPointerLock?.();
       if (p && p.catch) p.catch(() => {});
     }
-    M._input_mouse_button([0, 2, 1][e.button] ?? 0, 1);
+    if (!isP2 && M._input_mouse_button) M._input_mouse_button([0, 2, 1][e.button] ?? 0, 1);
   });
-  window.addEventListener('mouseup', (e) => M._input_mouse_button([0, 2, 1][e.button] ?? 0, 0));
-  canvas.addEventListener('mousemove', (e) => M._input_mouse_move(e.movementX, e.movementY));
+  window.addEventListener('mouseup', (e) => {
+    if (!isP2 && M._input_mouse_button) M._input_mouse_button([0, 2, 1][e.button] ?? 0, 0);
+  });
+  canvas.addEventListener('mousemove', (e) => {
+    if (!isP2 && M._input_mouse_move) M._input_mouse_move(e.movementX, e.movementY);
+  });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
@@ -311,16 +434,35 @@ function readPad(g) {
 // Called from the key handlers and from a 1 ms timer (not just the animation frame), so a change reaches
 // the game thread within a few ms wherever it is in its frame.
 let netLast = '';
-function pollLocalPad(M) {
+function pollLocalPad(M, session) {
+  const isP2 = session && (session.slot === 1 || session.you === 1);
+  if (isP2) {
+    const { buttons, lx, ly, rx, ry } = getP2GamepadState();
+    const key = `${buttons}:${lx},${ly},${rx},${ry}`;
+    if (key === netLast) return;
+    netLast = key;
+    const fnGamepad = M._input_gamepad || M.input_gamepad;
+    if (fnGamepad) fnGamepad(1, 1, buttons, lx, ly, rx, ry);
+    const sendInputFn = session?.client?.sendInput || RcNetplay?.sendInput;
+    if (sendInputFn) {
+      sendInputFn(session.client, { slot: 1, buttons, lx, ly, rx, ry, dt: 16667 });
+    }
+    return;
+  }
+
+  // Player 1
   const g = (navigator.getGamepads ? [...navigator.getGamepads()] : []).find((p) => p && p.connected);
   const { buttons, ax } = g ? readPad(g) : { buttons: 0, ax: [0, 0, 0, 0] };
-  const b = buttons | netKeyBits | netKeyPressed;
-  netKeyPressed = 0;
+  const b = buttons;
   const key = `${b}:${ax.join(',')}`;
   if (key === netLast) return;
   netLast = key;
   const fnGamepad = M._input_gamepad || M.input_gamepad;
   if (fnGamepad) fnGamepad(0, 1, b, ax[0], ax[1], ax[2], ax[3]);
+  const sendInputFn = session?.client?.sendInput || RcNetplay?.sendInput;
+  if (sendInputFn) {
+    sendInputFn(session.client, { slot: 0, buttons: b, lx: ax[0], ly: ax[1], rx: ax[2], ry: ax[3], dt: 16667 });
+  }
 }
 
 function pollGamepads(M) {
@@ -438,6 +580,7 @@ async function run(session) {
   envObj.RC_PADS = params.get('pads') || (session ? String(session.players) : '1');
   if (params.has('queue')) envObj.RC_QUEUE = params.get('queue');
   if (session) {
+    if (session.slot === undefined) session.slot = session.you;
     Object.assign(envObj, RcNetplay.gameEnv(session), { RC_USERDATA: '/opfs/' + netSaves(session) });
     console.log('[netplay] Booting engine with session ENV:', envObj);
   }
@@ -523,6 +666,27 @@ async function run(session) {
   M.input_gamepad = M._input_gamepad;
   M.input_key_hid = M._input_key_hid;
 
+  hookInput(M, session);
+  if (session) {
+    window.Module = M;
+    globalThis.Module = M;
+    session.client.attach(M);
+    showNetStatus(M, session);
+
+    // 1. Synchronized Boot Barrier:
+    // In multiplayer mode, DO NOT call c07_gpu_init / start the game loop immediately on room join.
+    // When the WebSocket / WebRTC connection is established between both players, exchange a { type: 'ready' } handshake.
+    // Only once BOTH peers have sent and received the ready signal, start the game engine simultaneously on both windows.
+    status('Synchronizing with player… waiting for ready signal');
+    console.log('[netplay] Reached boot barrier: exchanging ready handshake...');
+    session.client.sendReady(session.you);
+    const readyPulse = setInterval(() => session.client.sendReady(session.you), 250);
+    await session.client.waitForAllReady(25000);
+    clearInterval(readyPulse);
+    console.log('[netplay] Boot barrier cleared: both peers are ready! Initializing GPU and starting game loop.');
+    status('Both players synchronized! Starting game…');
+  }
+
   const canvas = $('canvas');
   if (typeof M._rc_gpu_init === 'function') {
     try {
@@ -538,15 +702,8 @@ async function run(session) {
     new ResizeObserver(() => { sizeCanvas(); M._rc_set_canvas_size(canvas.width, canvas.height); }).observe(canvas);
   }
 
-  hookInput(M, !!session);
-  if (session) {
-    window.Module = M;
-    globalThis.Module = M;
-    session.client.attach(M);
-    showNetStatus(M, session);
-  }
   startAudio(M).catch((e) => console.warn('audio unavailable:', e));
-  const poll = session ? pollLocalPad : pollGamepads;
+  const poll = session ? (m) => pollLocalPad(m, session) : pollGamepads;
 
   let due = 0;
   const pumpFn = typeof M._rc_gpu_pump === 'function' ? M._rc_gpu_pump : () => 0;
@@ -783,7 +940,7 @@ function setupOnline() {
         $('np-wait').classList.toggle('hidden', l.host);
       },
       onStart(s) {
-        session = { ...s, client, left };
+        session = { ...s, slot: s.you, client, left };
         run(session).catch(fail);
       },
       onLeft(slot) { left.add(slot); },
