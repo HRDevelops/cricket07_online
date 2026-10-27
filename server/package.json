@@ -1,0 +1,27 @@
+{
+  "name": "cricket07-netplay-server",
+  "version": "1.0.0",
+  "description": "Multiplayer netplay relay server for Cricket 07 in the browser (Cloudflare Worker & Local Node.js WebSocket fallback)",
+  "main": "local_relay.js",
+  "scripts": {
+    "start": "node local_relay.js",
+    "deploy": "wrangler deploy",
+    "secret:put": "wrangler secret put NETPLAY_SECRET"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.114.0"
+  },
+  "keywords": [
+    "cricket07",
+    "netplay",
+    "relay",
+    "webrtc",
+    "websocket",
+    "wasm"
+  ],
+  "author": "",
+  "license": "MIT"
+}
