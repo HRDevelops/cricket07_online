@@ -218,44 +218,12 @@
     function deliver(M, m) {
       const fnRemoteInput = M._netplay_remote_input || M.netplay_remote_input || M.wasmExports?.netplay_remote_input || M.asm?._netplay_remote_input;
       const fnRemoteHash = M._netplay_remote_hash || M.netplay_remote_hash || M.wasmExports?.netplay_remote_hash || M.asm?._netplay_remote_hash;
-      const fnGamepad = M._input_gamepad || M.input_gamepad || M.wasmExports?.input_gamepad || M.asm?._input_gamepad;
-      const fnKeyHid = M._input_key_hid || M.input_key_hid || M.wasmExports?.input_key_hid || M.asm?._input_key_hid;
 
-      // Handle lockstep batch entries in m.d
       for (const [s, f, b, lx, ly, rx, ry, dt] of m.d || []) {
         if (fnRemoteInput) {
           try { fnRemoteInput(s, f, b, lx, ly, rx, ry, dt >>> 0); } catch (e) { console.warn('[netplay] remote_input error:', e); }
         }
-        // Player 1 receives input packet from Player 2 (slot 1):
-        // Inject it into virtual Gamepad 1 slot: M._input_gamepad(1, 1, buttons, lx, ly, rx, ry)
-        if (s === 1 && me === 0 && fnGamepad) {
-          try { fnGamepad(1, 1, b, lx, ly, rx, ry); } catch (_) {}
-        }
-        // Player 2 receives input packet from Player 1 (slot 0):
-        if (s === 0 && me === 1 && fnGamepad) {
-          try { fnGamepad(0, 1, b, lx, ly, rx, ry); } catch (_) {}
-        }
       }
-
-      const slot = m.slot !== undefined ? m.slot : (m.s !== undefined ? m.s : (m.d && m.d[0] ? m.d[0][0] : undefined));
-
-      // Inject remote keyboard HID events from the other peer
-      if (fnKeyHid && (m.hid || m.hidCode !== undefined) && slot !== me) {
-        const hidCode = m.hid ? m.hid[0] : m.hidCode;
-        const isDown = m.hid ? m.hid[1] : (m.isDown ? 1 : 0);
-        try { fnKeyHid(hidCode, isDown); } catch (_) {}
-      }
-
-      // Inject remote gamepad inputs from the other peer
-      if (slot !== undefined && slot !== me && fnGamepad && (m.buttons !== undefined || (m.d && m.d[0]))) {
-        const b = m.buttons !== undefined ? m.buttons : (m.d && m.d[0] ? m.d[0][2] : 0);
-        const lx = m.lx !== undefined ? m.lx : (m.d && m.d[0] ? m.d[0][3] : 0);
-        const ly = m.ly !== undefined ? m.ly : (m.d && m.d[0] ? m.d[0][4] : 0);
-        const rx = m.rx !== undefined ? m.rx : (m.d && m.d[0] ? m.d[0][5] : 0);
-        const ry = m.ry !== undefined ? m.ry : (m.d && m.d[0] ? m.d[0][6] : 0);
-        try { fnGamepad(slot, 1, b, lx, ly, rx, ry); } catch (_) {}
-      }
-
       for (const [s, f, lo, hi] of m.h || []) {
         if (fnRemoteHash) {
           try { fnRemoteHash(s, f, lo, hi); } catch (_) {}
@@ -334,60 +302,12 @@
       });
     }
 
-    function sendInput(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
-      let pkt;
-      if (typeof arg1 === 'object' && arg1 !== null) {
-        const o = arg1;
-        const s = o.slot !== undefined ? o.slot : me;
-        const f = o.frame || 0;
-        const b = o.buttons || 0;
-        const lx = o.lx || 0, ly = o.ly || 0, rx = o.rx || 0, ry = o.ry || 0;
-        const dt = o.dt || 16667;
-        pkt = {
-          t: 'in',
-          slot: s,
-          d: [[s, f, b, lx, ly, rx, ry, dt >>> 0]],
-          buttons: b, lx, ly, rx, ry, dt
-        };
-        if (o.hidCode !== undefined || o.hid) {
-          pkt.hid = o.hid || [o.hidCode, o.isDown ? 1 : 0];
-          pkt.hidCode = pkt.hid[0];
-          pkt.isDown = pkt.hid[1];
-        }
-      } else {
-        const s = arg1 !== undefined ? arg1 : me;
-        const f = arg2 || 0;
-        const b = arg3 || 0;
-        const lx = arg4 || 0, ly = arg5 || 0, rx = arg6 || 0, ry = arg7 || 0;
-        const dt = arg8 || 16667;
-        pkt = {
-          t: 'in',
-          slot: s,
-          d: [[s, f, b, lx, ly, rx, ry, dt >>> 0]],
-          buttons: b, lx, ly, rx, ry, dt
-        };
-        if (arg9 !== undefined) {
-          pkt.hid = [arg9, arg10 ? 1 : 0];
-          pkt.hidCode = arg9;
-          pkt.isDown = arg10 ? 1 : 0;
-        }
-      }
-      const text = JSON.stringify(pkt);
-      if (ws && ws.readyState === 1) ws.send(text);
-      for (const p of peers.values()) {
-        if (p.dc?.readyState === 'open') {
-          try { p.dc.send(text); } catch (_) {}
-        }
-      }
-    }
-
     open(opts.url, false);
 
     return {
       start(delay) { send({ t: 'start', delay }); },
       sendReady,
       waitForAllReady,
-      sendInput,
       // Hooks a running game up to the room (after it was started with the session's settings).
       // The game thread kicks the pump as soon as it queues a message (host/netplay.c); the timer is a
       // safety net.
@@ -437,19 +357,7 @@
     };
   }
 
-  const api = {
-    connect,
-    gameEnv,
-    autoDelay,
-    sendInput(target, ...args) {
-      if (target && typeof target.sendInput === 'function') {
-        return target.sendInput(...args);
-      }
-      if (target && target.client && typeof target.client.sendInput === 'function') {
-        return target.client.sendInput(...args);
-      }
-    }
-  };
+  const api = { connect, gameEnv, autoDelay };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.RcNetplay = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -221,29 +221,26 @@ Object.assign(HID, {
 for (let i = 1; i <= 12; i++) HID['F' + i] = 57 + i;
 for (let i = 1; i <= 9; i++) HID['Numpad' + i] = 88 + i;
 
-function hookInput(M, session) {
+const CODE_TO_HID = HID;
+
+function hookInput(M) {
   const canvas = $('canvas');
 
-  const key = (down) => (e) => {
-    const u = HID[e.code];
-    if (u === undefined || (e.repeat && down)) return;
-    if (!e.metaKey) e.preventDefault();
-
-    if (M._input_key_hid) {
-      M._input_key_hid(u, down ? 1 : 0);
+  window.addEventListener('keydown', (e) => {
+    if (!M || !M._input_key_hid) return;
+    const u = CODE_TO_HID[e.code];
+    if (u !== undefined) {
+      M._input_key_hid(u, 1);
     }
+  });
 
-    // Forward keyboard event to peer in multiplayer
-    if (session) {
-      const sendInputFn = session?.client?.sendInput || RcNetplay?.sendInput;
-      if (sendInputFn) {
-        sendInputFn(session.client, { slot: session.slot ?? session.you ?? 0, hidCode: u, isDown: down ? 1 : 0, dt: 16667 });
-      }
+  window.addEventListener('keyup', (e) => {
+    if (!M || !M._input_key_hid) return;
+    const u = CODE_TO_HID[e.code];
+    if (u !== undefined) {
+      M._input_key_hid(u, 0);
     }
-  };
-
-  window.addEventListener('keydown', key(true));
-  window.addEventListener('keyup', key(false));
+  });
 
   // The game draws its own cursor and reads relative motion. Lock the pointer when the browser allows
   // it (then the system cursor can't leave the game); without a lock, motion over the canvas still works.
@@ -263,15 +260,7 @@ function hookInput(M, session) {
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
-// Gamepads (Gamepad API, polled every animation frame). Browsers only expose a pad after a button press
-// on it. The game sees each pad as a DirectInput "Logitech Dual Action USB" (host/dinput.c); ?pads=N exposes
-// N of them (default 1, at most 4). Like the native feeder (host/window.c), slots are DirectInput pad
-// numbers handed out in connection order, not the browser's gamepad.index (which can start above 0, e.g.
-// after a reconnect), and a pad keeps its slot until it is unplugged.
-// With mapping 'standard' buttons and axes are already in the layout input_gamepad() takes. Other pads
-// (older DirectInput-era ones such as the Logitech Precision) report buttons in HID order, as Windows
-// DirectInput presents them and as the game's controltypes.csv expects; their axes are indexed by HID
-// usage (X Y Z Rx Ry Rz ...), so the right stick is Z/Rz and Chrome puts the hat switch at axes[9].
+// Gamepads (Gamepad API, polled every animation frame).
 const PAD_SLOTS = 4;
 const padLast = Array.from({ length: PAD_SLOTS }, () => '');
 const padSlotIndex = Array(PAD_SLOTS).fill(-1);   // slot -> gamepad.index
@@ -289,33 +278,11 @@ function readPad(g) {
     return { buttons, ax: [0, 1, 2, 3].map((i) => axis16(g.axes[i])) };
   }
   g.buttons.forEach((b, i) => { if (i < STD_FOR_RAW.length && (b.pressed || b.value > 0.3)) buttons |= 1 << STD_FOR_RAW[i]; });
-  // axes[9] is only taken as a hat once it has shown the centred value, so a plain axis resting at 0 isn't
-  // read as d-pad down
   const hat = g.axes[9];
   if (hat > 1.1) padHats.add(g.index);
   else if (padHats.has(g.index) && hat >= -1.01) buttons |= HAT_DIRS[Math.round((hat + 1) * 3.5) % 8];
   const ry = g.axes.length > 5 ? g.axes[5] : g.axes[3];
   return { buttons, ax: [axis16(g.axes[0]), axis16(g.axes[1]), axis16(g.axes[2]), axis16(ry)] };
-}
-
-// Netplay: one local pad, the first connected gamepad merged with the keyboard (host/netplay.c sends it).
-// Called from the key handlers and from a 1 ms timer (not just the animation frame), so a change reaches
-// the game thread within a few ms wherever it is in its frame.
-let netLast = '';
-function pollLocalPad(M, session) {
-  const slot = session ? (session.slot ?? session.you ?? 0) : 0;
-  const g = (navigator.getGamepads ? [...navigator.getGamepads()] : []).find((p) => p && p.connected);
-  const { buttons, ax } = g ? readPad(g) : { buttons: 0, ax: [0, 0, 0, 0] };
-  const b = buttons;
-  const key = `${slot}:${b}:${ax.join(',')}`;
-  if (key === netLast) return;
-  netLast = key;
-  const fnGamepad = M._input_gamepad || M.input_gamepad;
-  if (fnGamepad) fnGamepad(slot, 1, b, ax[0], ax[1], ax[2], ax[3]);
-  const sendInputFn = session?.client?.sendInput || RcNetplay?.sendInput;
-  if (sendInputFn) {
-    sendInputFn(session.client, { slot, buttons: b, lx: ax[0], ly: ax[1], rx: ax[2], ry: ax[3], dt: 16667 });
-  }
 }
 
 function pollGamepads(M) {
@@ -519,7 +486,7 @@ async function run(session) {
   M.input_gamepad = M._input_gamepad;
   M.input_key_hid = M._input_key_hid;
 
-  hookInput(M, session);
+  hookInput(M);
   if (session) {
     window.Module = M;
     globalThis.Module = M;
@@ -556,7 +523,7 @@ async function run(session) {
   }
 
   startAudio(M).catch((e) => console.warn('audio unavailable:', e));
-  const poll = session ? (m) => pollLocalPad(m, session) : pollGamepads;
+  const poll = pollGamepads;
 
   let due = 0;
   const pumpFn = typeof M._rc_gpu_pump === 'function' ? M._rc_gpu_pump : () => 0;
@@ -569,7 +536,7 @@ async function run(session) {
   };
   requestAnimationFrame(frame);
   // readbacks mid-frame are answered without waiting for vsync; online, the pad is also sampled here
-  setInterval(() => { if (session) poll(M); pumpFn(0); }, 1);
+  setInterval(() => { poll(M); pumpFn(0); }, 1);
   // Online, a hidden tab still has to present frames (browsers pause requestAnimationFrame there), or the
   // lockstep would freeze every other player with it.
   if (session) setInterval(() => { if (document.hidden) { poll(M); pumpFn(1); } }, 16);
