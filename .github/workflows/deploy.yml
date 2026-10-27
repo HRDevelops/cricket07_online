@@ -32,18 +32,7 @@ jobs:
 
       - name: Build Distribution Bundle
         run: |
-          mkdir -p dist/build
-          cp web/index.html dist/
-          cp web/loader.js dist/
-          cp web/netplay.js dist/
-          cp web/audio-worklet.js dist/
-          cp web/coi-serviceworker.min.js dist/
-          cp web/_headers dist/
-          if [ -d "web/build" ]; then
-            cp -r web/build/* dist/build/
-          elif [ -d "build_web/www" ]; then
-            cp -r build_web/www/* dist/build/
-          fi
+          npm run build:dist
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

@@ -39,7 +39,6 @@ ghidra_project/
 work/
 build/
 build_web/
-dist/
 out_all/
 out_trace/
 tests/results/
@@ -50,10 +49,13 @@ userdata/
 *.wasm
 *.dSYM/
 
-# Allow web runtime build artifacts
+# Allow web runtime build artifacts & distribution
 !web/build/
 !web/build/**
 !web/build/*.wasm
+!dist/
+!dist/**
+!dist/build/*.wasm
 
 # Node.js & Dependencies
 node_modules/
