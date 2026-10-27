@@ -48,7 +48,7 @@ dist:
 	@cp web/audio-worklet.js dist/
 	@cp web/coi-serviceworker.min.js dist/
 	@cp web/_headers dist/
-	@if [ -d "build_web/www" ]; then cp -r build_web/www/* dist/build/; fi
+	@if [ -d "web/build" ]; then cp -r web/build/* dist/build/; elif [ -d "build_web/www" ]; then cp -r build_web/www/* dist/build/; fi
 	@echo "Distribution package ready in dist/"
 
 build-wasm:

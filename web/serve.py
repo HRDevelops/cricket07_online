@@ -35,7 +35,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def translate_path(self, path):
         p = urllib.parse.unquote(urllib.parse.urlparse(path).path)
         if p.startswith("/build/"):
-            return os.path.join(BUILD, p[len("/build/"):])
+            sub = p[len("/build/"):].lstrip("/")
+            web_build = os.path.join(HERE, "build", sub)
+            if os.path.exists(web_build):
+                return web_build
+            return os.path.join(BUILD, sub)
         return os.path.join(HERE, p.lstrip("/"))
 
 

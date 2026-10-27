@@ -50,6 +50,11 @@ userdata/
 *.wasm
 *.dSYM/
 
+# Allow web runtime build artifacts
+!web/build/
+!web/build/**
+!web/build/*.wasm
+
 # Node.js & Dependencies
 node_modules/
 npm-debug.log*
