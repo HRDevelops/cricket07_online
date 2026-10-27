@@ -227,7 +227,7 @@ for (let i = 1; i <= 9; i++) HID['Numpad' + i] = 88 + i;
 // on the keyboard's Esc, not the pad's Start, so Esc is bit 20: host/netplay.c applies it to the DirectInput
 // keyboard on every peer, with the pad inputs (NP_KEY_ESC). Backspace is B, back in menus.
 const NET_KEYS = {   // KeyboardEvent.code -> standard-gamepad bit (20: Esc key)
-  Enter: 0, Space: 0, KeyS: 0, Escape: 20, Backspace: 1, KeyD: 1, KeyA: 2, KeyW: 3, KeyQ: 4, KeyE: 5,
+  Enter: 0, NumpadEnter: 0, Space: 0, KeyS: 0, Escape: 20, Backspace: 1, KeyD: 1, KeyA: 2, KeyW: 3, KeyQ: 4, KeyE: 5,
   ShiftLeft: 4, ShiftRight: 4,
   Digit1: 6, Digit3: 7, Tab: 8, KeyP: 9, ArrowUp: 12, ArrowDown: 13, ArrowLeft: 14, ArrowRight: 15,
 };
@@ -237,6 +237,11 @@ let netKeyPressed = 0;   // keys pressed since the last poll, so a tap shorter t
 function hookInput(M, net) {
   const canvas = $('canvas');
   if (net) {
+    // In multiplayer mode, NEVER call _input_key_hid so Cricket 07 never detects a PC keyboard (P1)
+    if (M) {
+      M._input_key_hid = () => {};
+      M.input_key_hid = () => {};
+    }
     const key = (down) => (e) => {
       const bit = NET_KEYS[e.code];
       if (bit === undefined) return;
