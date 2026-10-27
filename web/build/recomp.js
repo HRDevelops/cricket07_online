@@ -2,9 +2,24 @@ var createC07=(()=>{var _scriptName=globalThis.document?.currentScript?.src;retu
 ;return Module}})();if(typeof exports==="object"&&typeof module==="object"){module.exports=createC07;module.exports.default=createC07}else if(typeof define==="function"&&define["amd"])define([],()=>createC07);var isPthread=globalThis.name=="em-pthread";isPthread&&createC07();
 
 ;if (typeof createC07 !== 'undefined') {
+  const origCreateC07 = createC07;
+  const wrappedCreateRecomp = async function(moduleArg = {}) {
+    const M = await origCreateC07(moduleArg);
+    if (M) {
+      M._rc_gpu_init = M._rc_gpu_init || M._c07_gpu_init || M.rc_gpu_init || M.c07_gpu_init || M.asm?._c07_gpu_init;
+      M._rc_gpu_pump = M._rc_gpu_pump || M._c07_gpu_pump || M.rc_gpu_pump || M.c07_gpu_pump || M.asm?._c07_gpu_pump;
+      M._rc_set_canvas_size = M._rc_set_canvas_size || M._c07_set_canvas_size || M.rc_set_canvas_size || M.c07_set_canvas_size || M.asm?._c07_set_canvas_size;
+      M._rc_audio_ring = M._rc_audio_ring || M._c07_audio_ring || M.rc_audio_ring || M.c07_audio_ring || M.asm?._c07_audio_ring;
+    }
+    return M;
+  };
   if (typeof globalThis !== 'undefined') {
-    globalThis.createRecomp = createC07;
-    globalThis.createC07 = createC07;
+    globalThis.createRecomp = wrappedCreateRecomp;
+    globalThis.createC07 = wrappedCreateRecomp;
   }
-  var createRecomp = createC07;
+  if (typeof window !== 'undefined') {
+    window.createRecomp = wrappedCreateRecomp;
+    window.createC07 = wrappedCreateRecomp;
+  }
+  var createRecomp = wrappedCreateRecomp;
 }

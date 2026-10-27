@@ -70,6 +70,17 @@ async function importFromPicker(fileList) {
     const w = await (await fileHandle(dir, e.dest, true)).createWritable();
     await w.write(e.f);
     await w.close();
+
+    // Auto-alias: if Cricket07.exe is imported, write to both Cricket07.exe and Cricket07.cracked.exe
+    const baseName = e.dest.split('/').pop().toLowerCase();
+    if (baseName === 'cricket07.exe') {
+      const parentRel = e.dest.split('/').slice(0, -1).join('/');
+      const crackedDest = parentRel ? `${parentRel}/Cricket07.cracked.exe` : 'Cricket07.cracked.exe';
+      const wCrack = await (await fileHandle(dir, crackedDest, true)).createWritable();
+      await wCrack.write(e.f);
+      await wCrack.close();
+    }
+
     done += e.f.size;
     $('progress').value = done / total;
   }
@@ -77,6 +88,51 @@ async function importFromPicker(fileList) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sig));
   await writeMarker([...new Uint8Array(digest)].slice(0, 6).map((b) => b.toString(16).padStart(2, '0')).join(''));
   $('progress').classList.add('hidden');
+}
+
+async function ensureCrackedExe() {
+  try {
+    const dir = await gameDir(true);
+    let hasCracked = false;
+    try {
+      await dir.getFileHandle('Cricket07.cracked.exe');
+      hasCracked = true;
+    } catch {}
+
+    if (!hasCracked) {
+      let sourceFile = null;
+      let sourceName = '';
+
+      for (const name of ['Cricket07.exe', 'cricket07.exe', 'CRICKET07.EXE']) {
+        try {
+          const h = await dir.getFileHandle(name);
+          sourceFile = await h.getFile();
+          sourceName = name;
+          break;
+        } catch {}
+      }
+
+      if (!sourceFile && dir.values) {
+        for await (const handle of dir.values()) {
+          if (handle.kind === 'file' && handle.name.toLowerCase().endsWith('.exe')) {
+            sourceFile = await handle.getFile();
+            sourceName = handle.name;
+            break;
+          }
+        }
+      }
+
+      if (sourceFile) {
+        console.log(`Auto-aliasing OPFS executable: ${sourceName} -> Cricket07.cracked.exe`);
+        const targetHandle = await dir.getFileHandle('Cricket07.cracked.exe', { create: true });
+        const w = await targetHandle.createWritable();
+        await w.write(await sourceFile.arrayBuffer());
+        await w.close();
+      }
+    }
+  } catch (err) {
+    console.warn('Could not check or alias Cricket07.cracked.exe in OPFS:', err);
+  }
 }
 
 // ------------------------------------------------------------------ input
@@ -228,7 +284,9 @@ async function startAudio(M) {
   const ctx = new AudioContext({ sampleRate: 44100, latencyHint: 'interactive' });
   await ctx.audioWorklet.addModule('audio-worklet.js');
   const node = new AudioWorkletNode(ctx, 'rc-ring', { outputChannelCount: [2] });
-  node.port.postMessage({ memory: M.wasmMemory, ring: M._rc_audio_ring() });
+  const ringFn = M._rc_audio_ring || M._c07_audio_ring || M.rc_audio_ring || M.c07_audio_ring || M.asm?._c07_audio_ring;
+  const ringPtr = typeof ringFn === 'function' ? ringFn() : 0;
+  node.port.postMessage({ memory: M.wasmMemory, ring: ringPtr });
   node.connect(ctx.destination);
   const resume = () => ctx.resume();
   window.addEventListener('pointerdown', resume);
@@ -281,16 +339,19 @@ async function run(session) {
   fullscreenTip();
   if (session) await clearNetSaves(session);
   sizeCanvas();
+  await ensureCrackedExe();
   const script = document.createElement('script');
   script.src = 'build/recomp.js';
   await new Promise((ok, fail) => { script.onload = ok; script.onerror = fail; document.head.appendChild(script); });
-  const M = await createRecomp({
+  const factory = window.createRecomp || window.createC07 || globalThis.createRecomp || globalThis.createC07;
+  if (!factory) throw new Error('WebAssembly initialization factory (createRecomp / createC07) not found.');
+  const M = await factory({
     arguments: ['/opfs/' + OPFS_DIR],
     print: (t) => console.log(t),
     printErr: (t) => console.log(t),
     preRun: [(m) => {
       if (params.has('mute')) m.ENV.RC_NO_AUDIO = '1';
-      if (params.get('exe')) m.ENV.RC_EXE = params.get('exe');
+      m.ENV.RC_EXE = params.get('exe') || 'Cricket07.cracked.exe';
       if (params.has('log')) m.ENV.RC_LOG = '1';
       if (params.has('pads')) m.ENV.RC_PADS = params.get('pads');
       if (params.has('queue')) m.ENV.RC_QUEUE = params.get('queue');
@@ -299,6 +360,22 @@ async function run(session) {
       if (!params.has('fps')) delete m.ENV.RC_LOG_FPS;
     }],
   });
+
+  // Resolve GPU and runtime functions across all symbol prefix variations (_rc_*, _c07_*, asm.*)
+  const gpuInit = M._rc_gpu_init || M._c07_gpu_init || M.rc_gpu_init || M.c07_gpu_init || M.asm?._rc_gpu_init || M.asm?.rc_gpu_init || M.asm?._c07_gpu_init || M.asm?.c07_gpu_init;
+  const setCanvasSize = M._rc_set_canvas_size || M._c07_set_canvas_size || M.rc_set_canvas_size || M.c07_set_canvas_size || M.asm?._rc_set_canvas_size || M.asm?.rc_set_canvas_size || M.asm?._c07_set_canvas_size || M.asm?.c07_set_canvas_size;
+  const gpuPump = M._rc_gpu_pump || M._c07_gpu_pump || M.rc_gpu_pump || M.c07_gpu_pump || M.asm?._rc_gpu_pump || M.asm?.rc_gpu_pump || M.asm?._c07_gpu_pump || M.asm?.c07_gpu_pump;
+  const audioRing = M._rc_audio_ring || M._c07_audio_ring || M.rc_audio_ring || M.c07_audio_ring || M.asm?._rc_audio_ring || M.asm?.rc_audio_ring || M.asm?._c07_audio_ring || M.asm?.c07_audio_ring;
+
+  if (typeof gpuInit !== 'function') {
+    throw new Error('WebAssembly GPU initialization function (_rc_gpu_init / _c07_gpu_init) was not found on module.');
+  }
+
+  M._rc_gpu_init = gpuInit;
+  M._rc_set_canvas_size = setCanvasSize;
+  M._rc_gpu_pump = gpuPump;
+  M._rc_audio_ring = audioRing;
+
   const canvas = $('canvas');
   M._rc_gpu_init(canvas.width, canvas.height);
   new ResizeObserver(() => { sizeCanvas(); M._rc_set_canvas_size(canvas.width, canvas.height); }).observe(canvas);
@@ -377,6 +454,7 @@ async function boot() {
     showPicker('Choose your Cricket 07 folder to start.');
     return;
   }
+  await ensureCrackedExe();
   ready();
 }
 
