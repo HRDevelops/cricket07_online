@@ -284,7 +284,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/download-assets' || url.pathname === '/download-assets/' || url.pathname === '/download') {
-    const targetUrl = url.searchParams.get('url') || 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket07.zip';
+    const targetUrl = url.searchParams.get('url') || 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket_07.zip';
     (async () => {
       try {
         const upstreamRes = await fetch(targetUrl, {

@@ -22,6 +22,7 @@ const MARKER = '.installed.json';   // { version } once every file is copied
 // Default multiplayer relay: deployed to Cloudflare Workers
 const DEFAULT_RELAY_URL = 'https://cricket07-netplay.husnain-rasoool.workers.dev';
 // 1-Click Game Asset Download URL: routed through Cloudflare Worker CORS proxy for reliable streaming
+const DEFAULT_ASSET_ARCHIVE_URL = 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket_07.zip';
 const DEFAULT_ASSET_PROXY_URL = `${DEFAULT_RELAY_URL.replace(/\/+$/, '')}/download-assets`;
 const ASSET_ARCHIVE_URL = params.get('assets') || params.get('download') || DEFAULT_ASSET_PROXY_URL;
 

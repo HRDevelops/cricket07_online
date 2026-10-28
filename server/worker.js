@@ -248,7 +248,8 @@ async function netplay(request, env, url) {
 
 // ------------------------------------------------------------------ game asset CORS proxy
 
-const DEFAULT_ASSET_URL = 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket07.zip';
+const DEFAULT_ASSET_ARCHIVE_URL = 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket_07.zip';
+const DEFAULT_ASSET_URL = DEFAULT_ASSET_ARCHIVE_URL;
 
 async function handleDownloadAssets(request, env, url) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -305,7 +306,7 @@ async function handleDownloadAssets(request, env, url) {
       resHeaders.set('Content-Type', 'application/zip');
     }
     if (!resHeaders.has('Content-Disposition')) {
-      resHeaders.set('Content-Disposition', 'attachment; filename="cricket07.zip"');
+      resHeaders.set('Content-Disposition', 'attachment; filename="cricket_07.zip"');
     }
 
     return new Response(upstreamRes.body, {
