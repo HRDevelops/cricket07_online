@@ -552,6 +552,28 @@ async function run(session) {
   M.input_gamepad = M._input_gamepad;
   M.input_key_hid = M._input_key_hid;
 
+  console.group(`[DIAGNOSTIC] Engine Boot - Slot: ${session ? session.slot : 'SOLO'}`);
+  console.log('1. Module.ENV passed:', M.ENV || envObj);
+  console.log('2. Direct exports check:', {
+    _netplay_status: typeof M._netplay_status,
+    _netplay_pop: typeof M._netplay_pop,
+    _netplay_msg: typeof M._netplay_msg,
+    _netplay_remote_input: typeof M._netplay_remote_input,
+    _netplay_remote_hash: typeof M._netplay_remote_hash,
+    _input_gamepad: typeof M._input_gamepad,
+    _input_key_hid: typeof M._input_key_hid,
+  });
+  if (M._netplay_status) {
+    try {
+      console.log('3. C netplay_status() initial state:', M._netplay_status());
+    } catch (err) {
+      console.error('3. Error calling M._netplay_status():', err);
+    }
+  } else {
+    console.warn('3. C _netplay_status is MISSING from Wasm exports!');
+  }
+  console.groupEnd();
+
   hookInput(M, !!session);
   if (session) {
     window.Module = M;
@@ -564,19 +586,22 @@ async function run(session) {
     // When the WebSocket / WebRTC connection is established between both players, exchange a { type: 'ready' } handshake.
     // Only once BOTH peers have sent and received the ready signal, start the game engine simultaneously on both windows.
     status('Synchronizing with player… waiting for ready signal');
-    console.log('[netplay] Reached boot barrier: exchanging ready handshake...');
-    session.client.sendReady(session.you);
-    const readyPulse = setInterval(() => session.client.sendReady(session.you), 250);
-    await session.client.waitForAllReady(25000);
+    console.log(`[HANDSHAKE] [${new Date().toISOString()}] Slot ${session.slot} reached boot barrier: exchanging ready handshake...`);
+    session.client.sendReady(session.slot);
+    const readyPulse = setInterval(() => session.client.sendReady(session.slot), 250);
+    const unblocked = await session.client.waitForAllReady(25000);
     clearInterval(readyPulse);
-    console.log('[netplay] Boot barrier cleared: both peers are ready! Initializing GPU and starting game loop.');
+    const unblockTimestamp = new Date().toISOString();
+    console.log(`[HANDSHAKE] [${unblockTimestamp}] Boot barrier cleared (unblocked: ${unblocked})! Both peers ready. Calling GPU init...`);
     status('Both players synchronized! Starting game…');
   }
 
   const canvas = $('canvas');
+  console.log(`[HANDSHAKE] [${new Date().toISOString()}] Calling GPU init function (c07_gpu_init / _rc_gpu_init)...`);
   if (typeof M._rc_gpu_init === 'function') {
     try {
       M._rc_gpu_init(canvas.width, canvas.height);
+      console.log(`[HANDSHAKE] [${new Date().toISOString()}] GPU init completed successfully.`);
     } catch (err) {
       console.warn('M._rc_gpu_init execution warning:', err);
     }
@@ -592,9 +617,15 @@ async function run(session) {
   const poll = session ? pollLocalPad : pollGamepads;
 
   let due = 0;
+  let diagFrame = 0;
   const pumpFn = typeof M._rc_gpu_pump === 'function' ? M._rc_gpu_pump : () => 0;
   const frame = (t) => {
     poll(M);
+    if (session && diagFrame % 60 === 0) {
+      const npStatus = M._netplay_status ? M._netplay_status() : 'N/A';
+      console.log(`[NETPLAY-SYNC] Local Frame: ${diagFrame} | C Netplay Status: ${npStatus}`);
+    }
+    diagFrame++;
     if (!session || t >= due - 4) {
       if (pumpFn(1)) { due = Math.max(due + 1000 / 60, t - 4); }
     } else pumpFn(0);   // mid-frame readbacks only

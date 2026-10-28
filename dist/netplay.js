@@ -58,6 +58,7 @@
     function markReady(slot) {
       const s = (slot !== undefined && slot >= 0) ? slot : (me >= 0 ? (1 - me) : 0);
       readySlots.add(s);
+      console.log(`[HANDSHAKE] [${new Date().toISOString()}] Remote peer slot ${s} sent ready signal.`);
       for (const listener of readyListeners) {
         try { listener(s); } catch (_) {}
       }
@@ -219,14 +220,32 @@
       const fnRemoteInput = M._netplay_remote_input || M.netplay_remote_input || M.wasmExports?.netplay_remote_input || M.asm?._netplay_remote_input;
       const fnRemoteHash = M._netplay_remote_hash || M.netplay_remote_hash || M.wasmExports?.netplay_remote_hash || M.asm?._netplay_remote_hash;
 
+      if (m.d && m.d.length) {
+        for (const input of m.d) {
+          console.log(`[PACKET-IN] Slot ${me} received peer packet:`, { fromSlot: input[0], frame: input[1], hasData: true, buttons: input[2], data: input });
+        }
+      } else if (m.h && m.h.length) {
+        for (const hash of m.h) {
+          console.log(`[PACKET-IN] Slot ${me} received peer hash packet:`, { fromSlot: hash[0], frame: hash[1], hasData: false, hash });
+        }
+      }
+
       for (const [s, f, b, lx, ly, rx, ry, dt] of m.d || []) {
         if (fnRemoteInput) {
-          try { fnRemoteInput(s, f, b, lx, ly, rx, ry, dt >>> 0); } catch (e) { console.warn('[netplay] remote_input error:', e); }
+          try {
+            fnRemoteInput(s, f, b, lx, ly, rx, ry, dt >>> 0);
+          } catch (err) {
+            console.error(`[PACKET-ERR] Failed delivering input to C:`, err);
+          }
         }
       }
       for (const [s, f, lo, hi] of m.h || []) {
         if (fnRemoteHash) {
-          try { fnRemoteHash(s, f, lo, hi); } catch (_) {}
+          try {
+            fnRemoteHash(s, f, lo, hi);
+          } catch (err) {
+            console.error(`[PACKET-ERR] Failed delivering hash to C:`, err);
+          }
         }
       }
     }
@@ -249,6 +268,12 @@
         console.warn('[netplay] pump drain error:', err);
       }
       if (!d.length && !h.length) return;
+      for (const input of d) {
+        console.log(`[PACKET-OUT] Slot ${me} sending input packet:`, { type: 'input', frame: input[1], buttons: input[2], data: input });
+      }
+      for (const hash of h) {
+        console.log(`[PACKET-OUT] Slot ${me} sending hash packet:`, { type: 'hash', frame: hash[1], data: hash });
+      }
       const text = JSON.stringify({ t: 'in', d, h });
       history.push(text);
       if (history.length > HISTORY) history.shift();
@@ -261,6 +286,7 @@
 
     function sendReady(slot) {
       const mySlot = slot !== undefined ? slot : me;
+      console.log(`[HANDSHAKE] [${new Date().toISOString()}] Local peer slot ${mySlot} sending ready signal.`);
       const msg = { type: 'ready', t: 'in', ready: 1, slot: mySlot };
       send(msg);
       for (const p of peers.values()) {
@@ -280,12 +306,14 @@
         };
 
         if (isReady()) {
+          console.log(`[HANDSHAKE] [${new Date().toISOString()}] Remote peer already marked ready in slot set:`, [...readySlots]);
           resolve(true);
           return;
         }
 
         let timer = null;
-        const cb = () => {
+        const cb = (slot) => {
+          console.log(`[HANDSHAKE] [${new Date().toISOString()}] waitForAllReady received ready notification from slot ${slot}`);
           if (isReady()) {
             readyListeners.delete(cb);
             if (timer) clearTimeout(timer);
@@ -296,7 +324,7 @@
 
         timer = setTimeout(() => {
           readyListeners.delete(cb);
-          console.warn('[netplay] waitForAllReady timed out after ' + timeoutMs + 'ms');
+          console.warn(`[HANDSHAKE] [${new Date().toISOString()}] waitForAllReady timed out after ${timeoutMs}ms`);
           resolve(false);
         }, timeoutMs);
       });
