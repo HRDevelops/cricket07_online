@@ -246,11 +246,95 @@ async function netplay(request, env, url) {
   return env.ROOMS.get(env.ROOMS.idFromName(code), hint ? { locationHint: hint } : {}).fetch(request);
 }
 
+// ------------------------------------------------------------------ game asset CORS proxy
+
+const DEFAULT_ASSET_URL = 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket07.zip';
+
+async function handleDownloadAssets(request, env, url) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return new Response('Method Not Allowed', {
+      status: 405,
+      headers: {
+        'Allow': 'GET, HEAD, OPTIONS',
+        'Access-Control-Allow-Origin': '*',
+      }
+    });
+  }
+
+  const targetUrl = url.searchParams.get('url') || env.ASSET_URL || DEFAULT_ASSET_URL;
+
+  const reqHeaders = new Headers();
+  reqHeaders.set('User-Agent', request.headers.get('User-Agent') || 'Cloudflare-Worker-Asset-Proxy');
+  reqHeaders.set('Accept', '*/*');
+  if (request.headers.has('Range')) {
+    reqHeaders.set('Range', request.headers.get('Range'));
+  }
+
+  try {
+    const upstreamRes = await fetch(targetUrl, {
+      method: request.method === 'HEAD' ? 'HEAD' : 'GET',
+      headers: reqHeaders,
+      redirect: 'follow',
+    });
+
+    if (!upstreamRes.ok && upstreamRes.status !== 206) {
+      return new Response(`Upstream asset fetch error (${upstreamRes.status}): ${upstreamRes.statusText}`, {
+        status: upstreamRes.status,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Expose-Headers': '*',
+        }
+      });
+    }
+
+    const resHeaders = new Headers();
+    for (const [key, value] of upstreamRes.headers.entries()) {
+      const lower = key.toLowerCase();
+      if (!['connection', 'keep-alive', 'transfer-encoding'].includes(lower)) {
+        resHeaders.set(key, value);
+      }
+    }
+
+    resHeaders.set('Access-Control-Allow-Origin', '*');
+    resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    resHeaders.set('Access-Control-Allow-Headers', '*');
+    resHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type, Content-Disposition');
+    resHeaders.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    if (!resHeaders.has('Content-Type')) {
+      resHeaders.set('Content-Type', 'application/zip');
+    }
+    if (!resHeaders.has('Content-Disposition')) {
+      resHeaders.set('Content-Disposition', 'attachment; filename="cricket07.zip"');
+    }
+
+    return new Response(upstreamRes.body, {
+      status: upstreamRes.status,
+      statusText: upstreamRes.statusText,
+      headers: resHeaders,
+    });
+  } catch (err) {
+    return new Response(`Asset proxy failure: ${err.message}`, {
+      status: 502,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+      }
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/netplay/')) return netplay(request, env, url);
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...cors(request, env), 'Access-Control-Allow-Methods': 'GET' } });
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...cors(request, env), 'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS', 'Access-Control-Allow-Headers': '*' } });
+
+    // Game Asset Proxy Route
+    if (url.pathname === '/download-assets' || url.pathname === '/download-assets/' || url.pathname === '/download') {
+      return handleDownloadAssets(request, env, url);
+    }
+
     if (url.pathname === '/_netplay_ticket' && request.method === 'GET') {
       const secret = ticketSecret(env);
       if (!secret) return respond('Netplay is not configured (set the NETPLAY_SECRET secret)', 503, cors(request, env));

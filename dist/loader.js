@@ -21,8 +21,9 @@ const OPFS_DIR = 'rcgame';
 const MARKER = '.installed.json';   // { version } once every file is copied
 // Default multiplayer relay: deployed to Cloudflare Workers
 const DEFAULT_RELAY_URL = 'https://cricket07-netplay.husnain-rasoool.workers.dev';
-// 1-Click Game Asset Download URL from GitHub Releases
-const ASSET_ARCHIVE_URL = params.get('assets') || params.get('download') || 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket07.zip';
+// 1-Click Game Asset Download URL: routed through Cloudflare Worker CORS proxy for reliable streaming
+const DEFAULT_ASSET_PROXY_URL = `${DEFAULT_RELAY_URL.replace(/\/+$/, '')}/download-assets`;
+const ASSET_ARCHIVE_URL = params.get('assets') || params.get('download') || DEFAULT_ASSET_PROXY_URL;
 
 function getNetplayServerUrl(promptIfMissing = false) {
   let url = params.get('netplay')?.trim() || $('np-server')?.value?.trim() || '';
@@ -186,7 +187,13 @@ async function ensureFflate() {
 }
 
 async function downloadAndInstallAssets(archiveUrl) {
-  const url = archiveUrl || ASSET_ARCHIVE_URL;
+  let url = archiveUrl || ASSET_ARCHIVE_URL;
+  if (!archiveUrl && !params.get('assets') && !params.get('download')) {
+    const relay = getNetplayServerUrl(false);
+    if (relay && !relay.includes('github.io')) {
+      url = `${relay.replace(/\/+$/, '')}/download-assets`;
+    }
+  }
   $('asset-setup')?.classList.add('hidden');
   $('dl-container')?.classList.remove('hidden');
   $('dl-title').textContent = 'Connecting to download server…';
@@ -203,6 +210,9 @@ async function downloadAndInstallAssets(archiveUrl) {
     throw new Error(`Failed to download game archive (${res.status}): ${res.statusText}`);
   }
   const total = Number(res.headers.get('Content-Length')) || 0;
+  if (!total) {
+    $('dl-progress')?.removeAttribute('value');
+  }
   const reader = res.body.getReader();
 
   // Clear previous OPFS files and ensure clean rcgame directory exists

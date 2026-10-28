@@ -283,6 +283,43 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (url.pathname === '/download-assets' || url.pathname === '/download-assets/' || url.pathname === '/download') {
+    const targetUrl = url.searchParams.get('url') || 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket07.zip';
+    (async () => {
+      try {
+        const upstreamRes = await fetch(targetUrl, {
+          method: req.method === 'HEAD' ? 'HEAD' : 'GET',
+          headers: {
+            'User-Agent': req.headers['user-agent'] || 'Node-Relay-Asset-Proxy',
+            'Accept': '*/*'
+          },
+          redirect: 'follow'
+        });
+        const headers = {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges, Content-Type, Content-Disposition',
+          'Cross-Origin-Resource-Policy': 'cross-origin',
+          'Content-Type': upstreamRes.headers.get('content-type') || 'application/zip'
+        };
+        const len = upstreamRes.headers.get('content-length');
+        if (len) headers['Content-Length'] = len;
+        res.writeHead(upstreamRes.status, headers);
+        if (req.method === 'HEAD' || !upstreamRes.body) {
+          res.end();
+          return;
+        }
+        const { Readable } = require('stream');
+        Readable.fromWeb(upstreamRes.body).pipe(res);
+      } catch (err) {
+        res.writeHead(502, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
+        res.end('Proxy failure: ' + err.message);
+      }
+    })();
+    return;
+  }
+
   if (url.pathname === '/' || url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
