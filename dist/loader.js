@@ -18,9 +18,8 @@
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const OPFS_DIR = 'rcgame';
-// Default multiplayer relay: once deployed to Cloudflare Workers, update this constant:
-// e.g. 'https://cricket07-relay.<your-subdomain>.workers.dev' or 'https://cricket07-netplay.<your-subdomain>.workers.dev'
-const DEFAULT_RELAY_URL = 'https://cricket07-relay.<your-subdomain>.workers.dev';
+// Default multiplayer relay: deployed to Cloudflare Workers
+const DEFAULT_RELAY_URL = 'https://cricket07-netplay.husnain-rasoool.workers.dev';
 
 function getNetplayServerUrl(promptIfMissing = false) {
   let url = params.get('netplay')?.trim() || $('np-server')?.value?.trim() || '';
