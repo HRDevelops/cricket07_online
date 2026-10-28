@@ -18,11 +18,17 @@
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const OPFS_DIR = 'rcgame';
-const MARKER = '.installed.json';   // { version } once every file is copied
+// Default multiplayer relay: once deployed to Cloudflare Workers, update this constant:
+// e.g. 'https://cricket07-relay.<your-subdomain>.workers.dev' or 'https://cricket07-netplay.<your-subdomain>.workers.dev'
+const DEFAULT_RELAY_URL = 'https://cricket07-relay.<your-subdomain>.workers.dev';
+
 function getNetplayServerUrl(promptIfMissing = false) {
   let url = params.get('netplay')?.trim() || $('np-server')?.value?.trim() || '';
   if (!url) {
     try { url = localStorage.getItem('rc-netplay')?.trim() || ''; } catch {}
+  }
+  if (!url && DEFAULT_RELAY_URL && !DEFAULT_RELAY_URL.includes('<')) {
+    url = DEFAULT_RELAY_URL.trim();
   }
   const isGitHubPages = location.hostname.endsWith('github.io');
   if (!url && isGitHubPages) {
@@ -31,8 +37,8 @@ function getNetplayServerUrl(promptIfMissing = false) {
         'Multiplayer Relay Server Required:\n\n' +
         'GitHub Pages is a static host and cannot issue netplay tickets or relay inputs.\n\n' +
         'Please enter your Cloudflare Worker URL or local relay server URL\n' +
-        '(e.g. https://cricket07-server.<subdomain>.workers.dev or http://localhost:8080):',
-        'http://localhost:8080'
+        '(e.g. https://cricket07-relay.<your-subdomain>.workers.dev or http://localhost:8080):',
+        DEFAULT_RELAY_URL && !DEFAULT_RELAY_URL.includes('<') ? DEFAULT_RELAY_URL : 'http://localhost:8080'
       );
       if (entered && entered.trim()) {
         url = entered.trim();
@@ -46,7 +52,7 @@ function getNetplayServerUrl(promptIfMissing = false) {
     }
   }
   if (!url) {
-    url = new URL('./', location.href).href;
+    url = (DEFAULT_RELAY_URL && !DEFAULT_RELAY_URL.includes('<')) ? DEFAULT_RELAY_URL : new URL('./', location.href).href;
   }
   if (!/^https?:\/\//i.test(url) && !/^wss?:\/\//i.test(url)) {
     url = (location.protocol === 'https:' ? 'https://' : 'http://') + url;
@@ -771,7 +777,7 @@ function setupOnline() {
     $('np-name').value = localStorage.getItem('rc-name') || '';
     const region = localStorage.getItem('rc-region');
     if ([...$('np-region').options].some((o) => o.value === region)) $('np-region').value = region;
-    const savedServer = params.get('netplay') || localStorage.getItem('rc-netplay') || '';
+    const savedServer = params.get('netplay') || localStorage.getItem('rc-netplay') || (DEFAULT_RELAY_URL && !DEFAULT_RELAY_URL.includes('<') ? DEFAULT_RELAY_URL : '');
     if ($('np-server')) $('np-server').value = savedServer;
     if (location.hostname.endsWith('github.io') && !savedServer) {
       const details = $('np-server-details');
