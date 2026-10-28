@@ -18,6 +18,7 @@
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const OPFS_DIR = 'rcgame';
+const MARKER = '.installed.json';   // { version } once every file is copied
 // Default multiplayer relay: deployed to Cloudflare Workers
 const DEFAULT_RELAY_URL = 'https://cricket07-netplay.husnain-rasoool.workers.dev';
 
