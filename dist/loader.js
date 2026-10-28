@@ -21,6 +21,8 @@ const OPFS_DIR = 'rcgame';
 const MARKER = '.installed.json';   // { version } once every file is copied
 // Default multiplayer relay: deployed to Cloudflare Workers
 const DEFAULT_RELAY_URL = 'https://cricket07-netplay.husnain-rasoool.workers.dev';
+// 1-Click Game Asset Download URL from GitHub Releases
+const ASSET_ARCHIVE_URL = params.get('assets') || params.get('download') || 'https://github.com/HRDevelops/cricket07_online/releases/download/v1.0.0/cricket07.zip';
 
 function getNetplayServerUrl(promptIfMissing = false) {
   let url = params.get('netplay')?.trim() || $('np-server')?.value?.trim() || '';
@@ -162,6 +164,187 @@ async function importFromPicker(fileList) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sig));
   await writeMarker([...new Uint8Array(digest)].slice(0, 6).map((b) => b.toString(16).padStart(2, '0')).join(''));
   $('progress').classList.add('hidden');
+}
+
+// ------------------------------------------------------------------ automated asset downloader & unpacker
+
+async function ensureFflate() {
+  if (window.fflate && window.fflate.Unzip) return window.fflate;
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'fflate.min.js';
+    s.onload = () => resolve(window.fflate);
+    s.onerror = () => {
+      const cdn = document.createElement('script');
+      cdn.src = 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/lib/browser.min.js';
+      cdn.onload = () => resolve(window.fflate);
+      cdn.onerror = () => reject(new Error('Failed to load fflate decompression library.'));
+      document.head.appendChild(cdn);
+    };
+    document.head.appendChild(s);
+  });
+}
+
+async function downloadAndInstallAssets(archiveUrl) {
+  const url = archiveUrl || ASSET_ARCHIVE_URL;
+  $('asset-setup')?.classList.add('hidden');
+  $('dl-container')?.classList.remove('hidden');
+  $('dl-title').textContent = 'Connecting to download server…';
+  $('dl-percent').textContent = '0%';
+  $('dl-progress').value = 0;
+  $('dl-detail').textContent = 'Requesting game package…';
+  $('dl-speed').textContent = '';
+  status('Downloading game assets…');
+
+  const fflate = await ensureFflate();
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Failed to download game archive (${res.status}): ${res.statusText}`);
+  }
+  const total = Number(res.headers.get('Content-Length')) || 0;
+  const reader = res.body.getReader();
+
+  // Clear previous OPFS files and ensure clean rcgame directory exists
+  const root = await navigator.storage.getDirectory();
+  try { await root.removeEntry(OPFS_DIR, { recursive: true }); } catch {}
+  await navigator.storage.persist?.();
+  const dir = await gameDir(true);
+
+  const uz = new fflate.Unzip();
+  uz.register(fflate.UnzipInflate);
+
+  const extractedFiles = [];
+  let writeQueue = Promise.resolve();
+  let pendingWritesCount = 0;
+
+  function queueWrite(fn) {
+    pendingWritesCount++;
+    writeQueue = writeQueue.then(async () => {
+      try {
+        await fn();
+      } finally {
+        pendingWritesCount--;
+      }
+    });
+    return writeQueue;
+  }
+
+  uz.onfile = (file) => {
+    let rawName = file.name.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!rawName || rawName.endsWith('/') || rawName.includes('__MACOSX') || rawName.endsWith('.DS_Store') || rawName.endsWith('Thumbs.db')) {
+      return;
+    }
+
+    // Strip top-level wrapper folder if the zip has one (e.g. cricket07/Data -> Data)
+    const parts = rawName.split('/');
+    const cleanDest = (parts.length > 1 && !['data', 'eawebdir', 'support', 'docs', 'autorun'].includes(parts[0].toLowerCase()))
+      ? parts.slice(1).join('/')
+      : rawName;
+
+    const fileChunks = [];
+    file.ondata = (err, chunk, final) => {
+      if (err) console.error('Decompression error on ' + cleanDest, err);
+      if (chunk && chunk.length > 0) fileChunks.push(chunk);
+      if (final) {
+        const chunksToWrite = fileChunks.slice();
+        fileChunks.length = 0;
+        const totalSize = chunksToWrite.reduce((sum, c) => sum + c.length, 0);
+        extractedFiles.push({ dest: cleanDest, size: totalSize });
+
+        queueWrite(async () => {
+          $('dl-title').textContent = 'Extracting files to browser storage…';
+          $('dl-detail').textContent = `Extracting ${cleanDest} (${extractedFiles.length} files)`;
+
+          const fh = await fileHandle(dir, cleanDest, true);
+          const w = await fh.createWritable();
+          for (const c of chunksToWrite) await w.write(c);
+          await w.close();
+
+          // Auto-alias Cricket07.exe -> Cricket07.cracked.exe
+          const baseName = cleanDest.split('/').pop().toLowerCase();
+          if (baseName === 'cricket07.exe') {
+            const parentRel = cleanDest.split('/').slice(0, -1).join('/');
+            const crackedDest = parentRel ? `${parentRel}/Cricket07.cracked.exe` : 'Cricket07.cracked.exe';
+            const fhCrack = await fileHandle(dir, crackedDest, true);
+            const wCrack = await fhCrack.createWritable();
+            for (const c of chunksToWrite) await wCrack.write(c);
+            await wCrack.close();
+          }
+        });
+      }
+    };
+    file.start();
+  };
+
+  let loaded = 0;
+  let lastTime = performance.now();
+  let lastLoaded = 0;
+  let speed = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        uz.push(new Uint8Array(0), true);
+        break;
+      }
+      loaded += value.length;
+      uz.push(value, false);
+
+      const now = performance.now();
+      const elapsed = (now - lastTime) / 1000;
+      if (elapsed >= 0.4) {
+        speed = (loaded - lastLoaded) / elapsed;
+        lastTime = now;
+        lastLoaded = loaded;
+      }
+
+      const pct = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+      $('dl-progress').value = total ? (loaded / total) : 0;
+      $('dl-percent').textContent = total ? `${pct}%` : `${mb(loaded)} MB`;
+      $('dl-detail').textContent = total
+        ? `Downloaded ${mb(loaded)} / ${mb(total)} MB`
+        : `Downloaded ${mb(loaded)} MB`;
+      $('dl-speed').textContent = speed > 0 ? `${(speed / 1e6).toFixed(1)} MB/s` : '';
+
+      // Backpressure to prevent excessive memory buffering while disk writes are processing
+      if (pendingWritesCount > 6) {
+        await writeQueue;
+      }
+    }
+
+    $('dl-detail').textContent = 'Finalizing file extraction…';
+    await writeQueue;
+
+    // Check if any files were extracted
+    if (extractedFiles.length === 0) {
+      throw new Error('No files found in downloaded archive.');
+    }
+
+    // Write installation marker
+    const sig = extractedFiles.map((e) => `${e.dest}:${e.size}`).sort().join('\n');
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sig));
+    const hash = [...new Uint8Array(digest)].slice(0, 6).map((b) => b.toString(16).padStart(2, '0')).join('');
+    await writeMarker(hash);
+    await ensureCrackedExe();
+
+    $('dl-title').textContent = 'Game installed successfully!';
+    $('dl-percent').textContent = '100%';
+    $('dl-progress').value = 1;
+    $('dl-detail').textContent = 'Starting Cricket 07…';
+    $('dl-speed').textContent = '';
+
+    // Automatically call boot to proceed to home screen
+    await boot();
+  } catch (err) {
+    console.error('Download/install failed:', err);
+    $('dl-container')?.classList.add('hidden');
+    $('asset-setup')?.classList.remove('hidden');
+    $('pick')?.classList.remove('hidden');
+    status('Download failed: ' + err.message);
+    throw err;
+  }
 }
 
 async function ensureCrackedExe() {
@@ -693,17 +876,33 @@ async function boot() {
   $('go-online').onclick = goOnline;
   for (const b of document.querySelectorAll('[data-go]')) b.onclick = () => show(b.dataset.go);
   $('folder').onchange = async (e) => {
-    $('pick').classList.add('hidden');
-    try { await importFromPicker(e.target.files); ready(); }
-    catch (err) { status(err.message); $('pick').classList.remove('hidden'); }
+    $('asset-setup')?.classList.add('hidden');
+    $('pick')?.classList.add('hidden');
+    $('progress')?.classList.remove('hidden');
+    try {
+      await importFromPicker(e.target.files);
+      ready();
+    } catch (err) {
+      status(err.message);
+      $('asset-setup')?.classList.remove('hidden');
+      $('pick')?.classList.remove('hidden');
+      $('progress')?.classList.add('hidden');
+    }
   };
+  if ($('btn-download')) {
+    $('btn-download').onclick = () => {
+      downloadAndInstallAssets().catch(fail);
+    };
+  }
   const showPicker = (msg) => {
-    status(msg);
-    $('pick').classList.remove('hidden');
-    $('help').classList.remove('hidden');
+    status(msg || 'Game files needed to play.');
+    $('asset-setup')?.classList.remove('hidden');
+    $('pick')?.classList.remove('hidden');
+    $('dl-container')?.classList.add('hidden');
+    $('help')?.classList.remove('hidden');
   };
 
-  $('reset').onclick = (e) => { e.preventDefault(); show('loading'); showPicker('Choose your Cricket 07 folder.'); };
+  $('reset').onclick = (e) => { e.preventDefault(); show('loading'); showPicker('Choose your Cricket 07 folder or download game files.'); };
   if (!(await readMarker())) {
     showPicker('Choose your Cricket 07 folder to start.');
     return;

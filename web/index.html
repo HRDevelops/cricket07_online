@@ -187,13 +187,34 @@
         <h1 class="brand">Cricket 07</h1>
         <p id="status">Checking your browser…</p>
         <progress id="progress" class="hidden" max="1" value="0"></progress>
-        <div>
-          <label id="pick" class="btn hidden" style="margin-top:16px">Choose game folder
+
+        <div id="asset-setup" class="hidden" style="margin-top:20px; display:flex; flex-direction:column; gap:12px; align-items:center;">
+          <button id="btn-download" class="btn" style="font-size:15px; padding:12px 22px; width:min(100%, 340px); display:flex; align-items:center; justify-content:center; gap:8px;">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Download &amp; Install Game (~1GB)
+          </button>
+          <div class="or" style="width:min(100%, 340px); margin:2px 0;">or choose local folder</div>
+          <label id="pick" class="btn ghost" style="width:min(100%, 340px); cursor:pointer;">
+            Select Cricket 07 folder
             <input id="folder" type="file" webkitdirectory multiple hidden>
           </label>
         </div>
-        <p id="help" class="hidden small">Pick your Cricket 07 folder: the one that holds <b>Data</b>, <b>Audio</b> and the game's executable. It is copied
-          into this browser's private storage once and never leaves your computer.</p>
+
+        <div id="dl-container" class="hidden" style="margin-top:22px; width:min(100%, 360px); margin-inline:auto; text-align:left;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:13px; color:var(--muted); margin-bottom:8px;">
+            <span id="dl-title" style="font-weight:600;">Downloading game assets…</span>
+            <span id="dl-percent" style="font-variant-numeric:tabular-nums; font-weight:700; color:var(--fg);">0%</span>
+          </div>
+          <progress id="dl-progress" max="1" value="0" style="width:100%; height:8px;"></progress>
+          <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--faint); margin-top:6px;">
+            <span id="dl-detail">Preparing download…</span>
+            <span id="dl-speed"></span>
+          </div>
+        </div>
+
+        <p id="help" class="hidden small" style="margin-top:16px;">The game files are stored directly in your browser's private offline storage (OPFS) for fast loading.</p>
       </section>
 
       <!-- home: solo or online -->
@@ -332,6 +353,7 @@
     </svg>
   </button>
 </main>
+<script src="fflate.min.js"></script>
 <script src="netplay.js"></script>
 <script src="loader.js"></script>
 </body>

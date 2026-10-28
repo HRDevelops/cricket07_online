@@ -7,7 +7,7 @@
     "serve": "python web/serve.py --port 8007",
     "relay": "node server/local_relay.js",
     "relay:install": "npm --prefix server install",
-    "build:dist": "node -e \"const fs=require('fs'); fs.mkdirSync('dist/build', {recursive:true}); ['index.html','loader.js','netplay.js','audio-worklet.js','coi-serviceworker.min.js','_headers'].forEach(f=>{ if(fs.existsSync('web/'+f)) fs.copyFileSync('web/'+f, 'dist/'+f); }); if(fs.existsSync('web/build')) { fs.cpSync('web/build', 'dist/build', {recursive:true}); } else if(fs.existsSync('build_web/www')) { fs.cpSync('build_web/www', 'dist/build', {recursive:true}); } console.log('Built dist/ bundle successfully');\"",
+    "build:dist": "node -e \"const fs=require('fs'); fs.mkdirSync('dist/build', {recursive:true}); ['index.html','loader.js','netplay.js','audio-worklet.js','coi-serviceworker.min.js','fflate.min.js','_headers'].forEach(f=>{ if(fs.existsSync('web/'+f)) fs.copyFileSync('web/'+f, 'dist/'+f); }); if(fs.existsSync('web/build')) { fs.cpSync('web/build', 'dist/build', {recursive:true}); } else if(fs.existsSync('build_web/www')) { fs.cpSync('build_web/www', 'dist/build', {recursive:true}); } console.log('Built dist/ bundle successfully');\"",
     "build:wasm": "bash build_web.sh",
     "deploy:worker": "npm --prefix server run deploy"
   },
