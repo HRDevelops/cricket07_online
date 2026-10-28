@@ -264,8 +264,9 @@ async function handleDownloadAssets(request, env, url) {
 
   const targetUrl = url.searchParams.get('url') || env.ASSET_URL || DEFAULT_ASSET_URL;
 
+  // Fresh headers only (never forward the incoming Host); browser UA for GitHub's release CDN
   const reqHeaders = new Headers();
-  reqHeaders.set('User-Agent', request.headers.get('User-Agent') || 'Cloudflare-Worker-Asset-Proxy');
+  reqHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
   reqHeaders.set('Accept', '*/*');
   if (request.headers.has('Range')) {
     reqHeaders.set('Range', request.headers.get('Range'));
@@ -290,11 +291,9 @@ async function handleDownloadAssets(request, env, url) {
     }
 
     const resHeaders = new Headers();
-    for (const [key, value] of upstreamRes.headers.entries()) {
-      const lower = key.toLowerCase();
-      if (!['connection', 'keep-alive', 'transfer-encoding'].includes(lower)) {
-        resHeaders.set(key, value);
-      }
+    for (const key of ['content-type', 'content-length', 'content-disposition', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+      const value = upstreamRes.headers.get(key);
+      if (value) resHeaders.set(key, value);
     }
 
     resHeaders.set('Access-Control-Allow-Origin', '*');
