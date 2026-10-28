@@ -402,6 +402,16 @@ function showNetStatus(M, session) {
   }, 1000);
 }
 
+// The shipped build/recomp.wasm was compiled from an older revision of host/*.c that reads C07_* variables
+// (getenv("C07_NETPLAY"), getenv("C07_PADS"), ...) while the current sources read RC_*. Mirror every RC_*
+// key to its C07_* twin so either build sees the same configuration.
+function withLegacyEnvAliases(env) {
+  for (const k of Object.keys(env)) {
+    if (k.startsWith('RC_')) env['C07_' + k.slice(3)] = env[k];
+  }
+  return env;
+}
+
 async function run(session) {
   $('panel').classList.add('hidden');
   fullscreenTip();
@@ -451,6 +461,7 @@ async function run(session) {
   } else {
     envObj.RC_PADS = params.get('pads') || '1';
   }
+  withLegacyEnvAliases(envObj);
 
   const M = await factory({
     arguments: ['/opfs/' + OPFS_DIR],
@@ -499,6 +510,7 @@ async function run(session) {
       m.ENV.RC_LOG_FPS = params.has('fps') ? '1' : '';
       if (!params.has('fps')) delete m.ENV.RC_LOG_FPS;
       Object.assign(m.ENV, envObj);
+      withLegacyEnvAliases(m.ENV);
       m.onExit = function(status) {
         console.log('Game exited with status:', status);
         triggerCleanExit('Emscripten m.onExit', status);
